@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: fod
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  ai:
+    build:
+      context: ./ai
+    ports:
+      - "8001:8001"
+    environment:
+      - MODEL_PATH=/models/best.pt
+    volumes:
+      - ./models:/models:ro
+    depends_on:
+      - db
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgres://postgres:pass@db:5432/fod
+      AI_BASE_URL: http://ai:8001
+      RUST_LOG: info
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - ai
+volumes:
+  pgdata:

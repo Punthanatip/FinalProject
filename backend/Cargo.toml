@@ -1,0 +1,25 @@
+[package]
+name = "backend-rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+axum = { version = "0.7", features = ["ws", "multipart"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "time"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde"] }
+dotenvy = "0.15"
+tokio-tungstenite = "0.20"
+futures = "0.3"
+dashmap = "5.5.3"
+reqwest = { version = "0.11", features = ["json", "multipart", "rustls-tls"] }
+bytes = "1"
+webrtc = { version = "0.9" }

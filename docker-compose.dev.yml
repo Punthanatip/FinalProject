@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: fod
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fod"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ai:
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    environment:
+      MODEL_PATH: /models/best.pt
+    command: uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+    volumes:
+      - ./ai/app.py:/app/app.py
+      - ./ai/requirements.txt:/app/requirements.txt:ro
+      - ./models:/models:ro
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:pass@db:5432/fod
+      AI_BASE_URL: http://ai:8001/
+      RUST_LOG: info
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - ai
+
+volumes:
+  pgdata:

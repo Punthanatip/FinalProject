@@ -1,0 +1,19 @@
+# Rust build artifacts
+target/
+debug/
+release/
+
+# Cargo lock (optional - some prefer to commit this)
+# Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust cache
+*.rustc_info.json
+flycheck*/
