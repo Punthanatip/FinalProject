@@ -165,18 +165,22 @@ class AnnotatedVideoTrack(VideoStreamTrack):
     
     async def recv(self):
         """Receive frame, process in thread, annotate, and return."""
+        t0 = perf_counter()
         frame = await self.source.recv()
+        t1 = perf_counter()
         
         if self._start_time is None:
             self._start_time = perf_counter()
         
         # Convert frame to numpy array (BGR for OpenCV)
         img = frame.to_ndarray(format="bgr24")
+        t2 = perf_counter()
         
         # Run YOLO in thread pool to avoid blocking event loop
         img, detections_list, w, h = await asyncio.to_thread(
             self._process_frame_sync, img, self.conf_threshold
         )
+        t3 = perf_counter()
         
         # Calculate FPS
         self._frame_count += 1
@@ -221,6 +225,19 @@ class AnnotatedVideoTrack(VideoStreamTrack):
         new_frame = VideoFrame.from_ndarray(img, format="bgr24")
         new_frame.pts = frame.pts
         new_frame.time_base = frame.time_base
+        t4 = perf_counter()
+        
+        # Performance timing log every 30 frames
+        if self._frame_count % 30 == 0:
+            logger.info(
+                f"⏱ Frame #{self._frame_count} | "
+                f"recv: {(t1-t0)*1000:.1f}ms | "
+                f"convert: {(t2-t1)*1000:.1f}ms | "
+                f"yolo: {(t3-t2)*1000:.1f}ms | "
+                f"post: {(t4-t3)*1000:.1f}ms | "
+                f"total: {(t4-t0)*1000:.1f}ms | "
+                f"= {1000/(t4-t0):.1f} FPS"
+            )
         
         return new_frame
 
