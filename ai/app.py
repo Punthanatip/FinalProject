@@ -32,15 +32,23 @@ logger = logging.getLogger(__name__)
 
 # ==================== Device & Model Setup ====================
 
+# Check ONNX Runtime GPU support (independent of PyTorch CUDA)
+try:
+    import onnxruntime
+    ORT_GPU = "CUDAExecutionProvider" in onnxruntime.get_available_providers()
+except Exception:
+    ORT_GPU = False
+
 DEVICE = 0 if torch.cuda.is_available() else "cpu"
 try:
     torch.backends.cudnn.benchmark = True   
 except Exception:
     pass
 
-DEFAULT_MODEL = Path(__file__).parent / "models" / "best.pt"
+DEFAULT_MODEL = Path(__file__).parent / "models" / "best.onnx"
 MODEL_PATH = DEFAULT_MODEL
 MODEL_NAME = MODEL_PATH.name
+IS_ONNX = MODEL_PATH.suffix == ".onnx"
 model = None
 READY = False
 
@@ -119,14 +127,16 @@ class AnnotatedVideoTrack(VideoStreamTrack):
         
         if model is not None and READY:
             try:
-                results = model.predict(
-                    img, 
+                predict_kwargs = dict(
                     conf=conf_threshold, 
                     imgsz=640,
-                    verbose=False, 
-                    device=DEVICE,
-                    half=True  # FP16 inference - ~30% faster on GPU
+                    verbose=False,
                 )
+                # ONNX handles device/providers internally; only pass device for PyTorch
+                if not IS_ONNX:
+                    predict_kwargs["device"] = DEVICE
+                    predict_kwargs["half"] = True
+                results = model.predict(img, **predict_kwargs)
                 
                 for box in results[0].boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
@@ -230,14 +240,49 @@ class AnnotatedVideoTrack(VideoStreamTrack):
 def load_model_startup():
     global model, READY
     try:
-        model = YOLO(MODEL_PATH)
+        model = YOLO(MODEL_PATH, task="detect")
+        warmup_kwargs = dict(imgsz=640, conf=0.01, verbose=False)
+        if not IS_ONNX:
+            warmup_kwargs["device"] = DEVICE
         _ = model.predict(
-            np.zeros((64, 64, 3), dtype=np.uint8),
-            imgsz=64, conf=0.01, verbose=False, device=DEVICE
+            np.zeros((640, 640, 3), dtype=np.uint8),
+            **warmup_kwargs
         )
+        
+        # Force ONNX Runtime to use CUDA GPU if available
+        if IS_ONNX and ORT_GPU:
+            try:
+                session = model.predictor.model.session
+                providers_before = session.get_providers()
+                logger.info(f"ONNX providers before patch: {providers_before}")
+                
+                if "CUDAExecutionProvider" not in providers_before:
+                    import onnxruntime as ort
+                    model_path_str = str(MODEL_PATH)
+                    new_session = ort.InferenceSession(
+                        model_path_str,
+                        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+                    )
+                    model.predictor.model.session = new_session
+                    logger.info(f"ONNX providers after patch: {new_session.get_providers()}")
+                    
+                    # Re-warmup with GPU session
+                    _ = model.predict(
+                        np.zeros((640, 640, 3), dtype=np.uint8),
+                        imgsz=640, conf=0.01, verbose=False
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to patch ONNX GPU session: {e}")
+        
         READY = True
-        logger.info(f"Model loaded on device={DEVICE}, CUDA={torch.cuda.is_available()}")
-        if torch.cuda.is_available():
+        logger.info(f"Model loaded: format={'ONNX' if IS_ONNX else 'PyTorch'}, ORT_GPU={ORT_GPU}, CUDA={torch.cuda.is_available()}")
+        if IS_ONNX and ORT_GPU:
+            actual_providers = model.predictor.model.session.get_providers()
+            if "CUDAExecutionProvider" in actual_providers:
+                logger.info("🚀 ONNX Runtime CONFIRMED using CUDA GPU!")
+            else:
+                logger.warning(f"⚠️ ONNX still using: {actual_providers}")
+        elif torch.cuda.is_available():
             logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
     except Exception as e:
         READY = False

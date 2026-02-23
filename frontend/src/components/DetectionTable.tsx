@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { ArrowUpDown, Download } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { ArrowUpDown, Download, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Detection {
   id: string;
@@ -14,16 +14,39 @@ interface Detection {
 interface DetectionTableProps {
   timeZone: 'UTC' | 'Local';
   selectedClasses: string[];
+  useMock?: boolean;
 }
 
 type SortField = 'timestamp' | 'fodType' | 'confidence';
 type SortDirection = 'asc' | 'desc';
 
-export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProps) {
+const PAGE_SIZE = 15;
+
+// Mock data generator
+function generateMockDetections(): Detection[] {
+  const types = ['Metal debris', 'Plastic bag', 'Rubber fragment', 'Stone', 'Wire', 'Bolt', 'Fabric', 'Glass'];
+  const cameras = ['CAM-01 (RW09L)', 'CAM-02 (RW09R)', 'CAM-03 (RW27L)', 'CAM-04 (TWY-A)'];
+  return Array.from({ length: 87 }, (_, i) => {
+    const date = new Date();
+    date.setMinutes(date.getMinutes() - Math.floor(Math.random() * 1440));
+    return {
+      id: `det-${String(i + 1).padStart(4, '0')}`,
+      timestamp: date.toISOString(),
+      fodType: types[Math.floor(Math.random() * types.length)],
+      lat: 13.6900 + (Math.random() * 0.01 - 0.005),
+      lon: 100.7501 + (Math.random() * 0.01 - 0.005),
+      confidence: 0.55 + Math.random() * 0.45,
+      camera: cameras[Math.floor(Math.random() * cameras.length)],
+    };
+  });
+}
+
+export function DetectionTable({ timeZone, selectedClasses, useMock }: DetectionTableProps) {
   const [detections, setDetections] = useState<Detection[]>([]);
   const [sortField, setSortField] = useState<SortField>('timestamp');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isLoading, setIsLoading] = useState(true);
+  const [page, setPage] = useState(0);
 
   const toIso = useCallback((ts: unknown): string => {
     if (typeof ts === 'string') return ts;
@@ -44,6 +67,12 @@ export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProp
   }, []);
 
   useEffect(() => {
+    if (useMock) {
+      setDetections(generateMockDetections());
+      setIsLoading(false);
+      return;
+    }
+
     const fetchRecent = async () => {
       setIsLoading(true);
       try {
@@ -51,14 +80,9 @@ export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProp
         if (!res.ok) throw new Error('failed');
         const rows = await res.json();
         const mapped: Detection[] = rows.map((r: {
-          id: string;
-          ts: unknown;
-          class_name: string;
-          latitude: number;
-          longitude: number;
-          confidence: number;
-          source_ref?: string;
-          source?: string;
+          id: string; ts: unknown; class_name: string;
+          latitude: number; longitude: number; confidence: number;
+          source_ref?: string; source?: string;
         }) => ({
           id: r.id,
           timestamp: toIso(r.ts),
@@ -78,7 +102,7 @@ export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProp
     fetchRecent();
     const interval = setInterval(fetchRecent, 30000);
     return () => clearInterval(interval);
-  }, [toIso]);
+  }, [toIso, useMock]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -87,12 +111,12 @@ export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProp
       setSortField(field);
       setSortDirection('desc');
     }
+    setPage(0);
   };
 
   const formatTimestamp = useCallback((iso: string) => {
     const date = new Date(iso);
     if (isNaN(date.getTime())) return 'Invalid Date';
-
     if (timeZone === 'UTC') {
       return new Intl.DateTimeFormat('en-GB', {
         year: 'numeric', month: '2-digit', day: '2-digit',
@@ -108,53 +132,43 @@ export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProp
     }).format(date);
   }, [timeZone]);
 
-  const getSeverityColor = (confidence: number) => {
-    if (confidence >= 0.90) return '#FF3B30';
-    if (confidence >= 0.75) return '#FFCC00';
-    return '#007BFF';
+  const getSeverityLabel = (confidence: number) => {
+    if (confidence >= 0.90) return { label: 'Critical', cls: 'severity-pill--critical' };
+    if (confidence >= 0.75) return { label: 'Warning', cls: 'severity-pill--warning' };
+    return { label: 'Normal', cls: 'severity-pill--normal' };
   };
 
-  // Filter and sort data
-  const filteredData = detections.filter(det => {
-    if (selectedClasses.includes('all')) return true;
-    return selectedClasses.includes(det.fodType);
-  }).sort((a, b) => {
-    let aVal: string | number = a[sortField];
-    let bVal: string | number = b[sortField];
+  // Filter and sort
+  const filteredData = useMemo(() => {
+    return detections.filter(det => {
+      if (selectedClasses.includes('all')) return true;
+      return selectedClasses.includes(det.fodType);
+    }).sort((a, b) => {
+      let aVal: string | number = a[sortField];
+      let bVal: string | number = b[sortField];
+      if (sortField === 'timestamp') {
+        aVal = new Date(aVal).getTime();
+        bVal = new Date(bVal).getTime();
+      }
+      return sortDirection === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
+    });
+  }, [detections, selectedClasses, sortField, sortDirection]);
 
-    if (sortField === 'timestamp') {
-      aVal = new Date(aVal).getTime();
-      bVal = new Date(bVal).getTime();
-    }
-
-    if (sortDirection === 'asc') {
-      return aVal > bVal ? 1 : -1;
-    }
-    return aVal < bVal ? 1 : -1;
-  });
+  const totalPages = Math.ceil(filteredData.length / PAGE_SIZE);
+  const pageData = filteredData.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const handleExportCSV = () => {
-    if (filteredData.length === 0) {
-      alert('No data to export');
-      return;
-    }
-
+    if (filteredData.length === 0) { alert('No data to export'); return; }
     const headers = ['Timestamp', 'FOD Type', 'Latitude', 'Longitude', 'Confidence (%)', 'Camera'];
     const rows = filteredData.map(det => [
-      formatTimestamp(det.timestamp),
-      det.fodType,
-      det.lat.toFixed(6),
-      det.lon.toFixed(6),
-      (det.confidence * 100).toFixed(1),
-      det.camera
+      formatTimestamp(det.timestamp), det.fodType,
+      det.lat.toFixed(6), det.lon.toFixed(6),
+      (det.confidence * 100).toFixed(1), det.camera
     ]);
-
-    // Add BOM for UTF-8 compatibility
     const BOM = '\uFEFF';
     const csv = BOM + [headers, ...rows].map(row =>
       row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')
     ).join('\r\n');
-
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -167,115 +181,174 @@ export function DetectionTable({ timeZone, selectedClasses }: DetectionTableProp
   };
 
   return (
-    <div className="bg-[#1A1A1A] border border-[#2C2C2E] rounded-lg overflow-hidden">
-      <div className="bg-[#121212] border-b border-[#2C2C2E] px-4 py-3 flex items-center justify-between">
+    <div className="glass-card overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div>
-          <h3>Detection Records</h3>
-          <p className="text-sm text-gray-400">
-            {isLoading ? 'Loading...' : `${filteredData.length} records`}
+          <h3 style={{ fontWeight: 600 }}>Detection Records</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {isLoading ? 'Loading...' : `${filteredData.length} records found`}
           </p>
         </div>
         <button
           onClick={handleExportCSV}
           disabled={filteredData.length === 0}
-          className="flex items-center gap-2 px-4 py-2 bg-[#007BFF] hover:bg-[#0066DD] disabled:bg-[#2C2C2E] disabled:cursor-not-allowed rounded-lg text-white text-sm transition-colors"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-xs transition-all"
+          style={{
+            background: filteredData.length > 0 ? 'linear-gradient(135deg, #007BFF, #0056CC)' : '#2C2C2E',
+            fontWeight: 500,
+            opacity: filteredData.length === 0 ? 0.5 : 1,
+            cursor: filteredData.length === 0 ? 'not-allowed' : 'pointer',
+            boxShadow: filteredData.length > 0 ? '0 4px 12px rgba(0,123,255,0.25)' : 'none',
+          }}
         >
-          <Download className="w-4 h-4" />
+          <Download className="w-3.5 h-3.5" />
           Export CSV
         </button>
       </div>
 
+      {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full">
-          <thead className="bg-[#121212] border-b border-[#2C2C2E]">
-            <tr>
-              <th className="px-4 py-3 text-left">
-                <button
-                  onClick={() => handleSort('timestamp')}
-                  className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
-                >
-                  Timestamp
-                  <ArrowUpDown className={`w-3 h-3 ${sortField === 'timestamp' ? 'text-[#007BFF]' : ''}`} />
-                </button>
-              </th>
-              <th className="px-4 py-3 text-left">
-                <button
-                  onClick={() => handleSort('fodType')}
-                  className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
-                >
-                  FOD Type
-                  <ArrowUpDown className={`w-3 h-3 ${sortField === 'fodType' ? 'text-[#007BFF]' : ''}`} />
-                </button>
-              </th>
-              <th className="px-4 py-3 text-left text-sm text-gray-400">
-                Latitude
-              </th>
-              <th className="px-4 py-3 text-left text-sm text-gray-400">
-                Longitude
-              </th>
-              <th className="px-4 py-3 text-left">
-                <button
-                  onClick={() => handleSort('confidence')}
-                  className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
-                >
-                  Confidence
-                  <ArrowUpDown className={`w-3 h-3 ${sortField === 'confidence' ? 'text-[#007BFF]' : ''}`} />
-                </button>
-              </th>
-              <th className="px-4 py-3 text-left text-sm text-gray-400">
-                Camera
-              </th>
+          <thead>
+            <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              {[
+                { key: 'timestamp' as SortField, label: 'Timestamp', sortable: true },
+                { key: 'fodType' as SortField, label: 'FOD Type', sortable: true },
+                { key: null, label: 'Location', sortable: false },
+                { key: 'confidence' as SortField, label: 'Confidence', sortable: true },
+                { key: null, label: 'Camera', sortable: false },
+              ].map((col, i) => (
+                <th key={i} className="px-5 py-3 text-left">
+                  {col.sortable && col.key ? (
+                    <button
+                      onClick={() => handleSort(col.key!)}
+                      className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-white transition-colors"
+                      style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.65rem' }}
+                    >
+                      {col.label}
+                      <ArrowUpDown className={`w-3 h-3 ${sortField === col.key ? 'text-[#007BFF]' : ''}`} />
+                    </button>
+                  ) : (
+                    <span
+                      className="text-xs text-gray-500"
+                      style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.65rem' }}
+                    >
+                      {col.label}
+                    </span>
+                  )}
+                </th>
+              ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#2C2C2E]">
+          <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={5} className="px-5 py-12 text-center text-gray-500 text-sm">
                   Loading...
                 </td>
               </tr>
-            ) : filteredData.length === 0 ? (
+            ) : pageData.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={5} className="px-5 py-12 text-center text-gray-500 text-sm">
                   No detection records found
                 </td>
               </tr>
             ) : (
-              filteredData.slice(0, 100).map((detection) => (
-                <tr
-                  key={detection.id}
-                  className="hover:bg-[#2C2C2E]/30 transition-colors"
-                >
-                  <td className="px-4 py-3 text-sm text-gray-300 tabular-nums">
-                    {formatTimestamp(detection.timestamp)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-white">
-                    {detection.fodType}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-300 tabular-nums">
-                    {detection.lat.toFixed(6)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-300 tabular-nums">
-                    {detection.lon.toFixed(6)}
-                  </td>
-                  <td className="px-4 py-3 text-sm tabular-nums">
-                    <span style={{ color: getSeverityColor(detection.confidence) }}>
-                      {(detection.confidence * 100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-300">
-                    {detection.camera}
-                  </td>
-                </tr>
-              ))
+              pageData.map((detection) => {
+                const severity = getSeverityLabel(detection.confidence);
+                return (
+                  <tr
+                    key={detection.id}
+                    className="table-row-hover"
+                    style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}
+                  >
+                    <td className="px-5 py-3 text-xs text-gray-400 tabular-nums">
+                      {formatTimestamp(detection.timestamp)}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className="text-xs px-2.5 py-1 rounded-md text-white"
+                        style={{
+                          background: 'rgba(255,255,255,0.06)',
+                          fontWeight: 500,
+                          fontSize: '0.7rem',
+                        }}
+                      >
+                        {detection.fodType}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-gray-500 tabular-nums">
+                      {detection.lat.toFixed(4)}, {detection.lon.toFixed(4)}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={`severity-pill ${severity.cls}`}>
+                        {(detection.confidence * 100).toFixed(0)}% · {severity.label}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-gray-500">
+                      {detection.camera}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
 
-      {filteredData.length > 100 && (
-        <div className="bg-[#121212] border-t border-[#2C2C2E] px-4 py-2 text-center text-sm text-gray-400">
-          Showing first 100 of {filteredData.length} records
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div
+          className="px-5 py-3 flex items-center justify-between"
+          style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+        >
+          <span className="text-xs text-gray-500">
+            Page {page + 1} of {totalPages} · {filteredData.length} total records
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="p-1.5 rounded-md hover:bg-[#2C2C2E] transition-colors disabled:opacity-30"
+            >
+              <ChevronLeft className="w-4 h-4 text-gray-400" />
+            </button>
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              let pageNum: number;
+              if (totalPages <= 5) {
+                pageNum = i;
+              } else if (page < 3) {
+                pageNum = i;
+              } else if (page > totalPages - 4) {
+                pageNum = totalPages - 5 + i;
+              } else {
+                pageNum = page - 2 + i;
+              }
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => setPage(pageNum)}
+                  className="w-7 h-7 rounded-md text-xs transition-all"
+                  style={{
+                    background: page === pageNum ? '#007BFF' : 'transparent',
+                    color: page === pageNum ? '#fff' : '#8E8E93',
+                    fontWeight: page === pageNum ? 600 : 400,
+                    fontSize: '0.7rem',
+                  }}
+                >
+                  {pageNum + 1}
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+              className="p-1.5 rounded-md hover:bg-[#2C2C2E] transition-colors disabled:opacity-30"
+            >
+              <ChevronRight className="w-4 h-4 text-gray-400" />
+            </button>
+          </div>
         </div>
       )}
     </div>
