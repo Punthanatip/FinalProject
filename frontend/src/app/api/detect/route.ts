@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
   const params = new URLSearchParams();
   if (threshold) params.set('conf', threshold);
-  params.set('imgsz', '832');
+  params.set('imgsz', '640');
   params.set('save', saveIncoming === 'true' ? 'true' : 'false');
   if (latitude) params.set('latitude', latitude);
   if (longitude) params.set('longitude', longitude);
