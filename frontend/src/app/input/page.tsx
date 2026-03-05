@@ -13,10 +13,13 @@ export default function Page() {
     if ((source === 'image' || source === 'video') && config.file) {
       try {
         previewUrl = URL.createObjectURL(config.file);
-      } catch {}
+      } catch { }
     }
     const params = new URLSearchParams({ roomId, source });
     if (previewUrl) params.set('previewUrl', previewUrl);
+    if (config.latitude != null) params.set('lat', String(config.latitude));
+    if (config.longitude != null) params.set('lng', String(config.longitude));
+    if (config.yaw != null) params.set('yaw', String(config.yaw));
     router.push(`/monitoring?${params.toString()}`);
   };
 

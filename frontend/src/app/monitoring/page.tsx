@@ -20,6 +20,10 @@ export default function Page() {
     }
   }, [roomIdParam]);
 
+  const initialLat = parseFloat(searchParams.get('lat') || '0') || 0;
+  const initialLng = parseFloat(searchParams.get('lng') || '0') || 0;
+  const initialYaw = parseFloat(searchParams.get('yaw') || '0') || 0;
+
   return (
     <RealtimeMonitoring
       active={active}
@@ -28,6 +32,9 @@ export default function Page() {
       roomId={rid}
       source={source}
       previewUrl={previewUrl}
+      initialLat={initialLat}
+      initialLng={initialLng}
+      initialYaw={initialYaw}
     />
   );
 }

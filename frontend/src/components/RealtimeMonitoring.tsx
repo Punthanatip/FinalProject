@@ -9,7 +9,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { StopCircle, Wifi, WifiOff } from 'lucide-react';
+import { StopCircle, Wifi, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
 import { EventLog } from './EventLog';
 import { BoundingBox } from './BoundingBox';
 
@@ -37,6 +38,9 @@ interface RealtimeMonitoringProps {
   roomId: string;
   source?: 'image' | 'video' | 'live';
   previewUrl?: string;
+  initialLat?: number;
+  initialLng?: number;
+  initialYaw?: number;
 }
 
 // AI WebRTC server URL (same as FastAPI - port 8001)
@@ -48,13 +52,22 @@ export function RealtimeMonitoring({
   onStart,
   roomId,
   source = 'live',
-  previewUrl
+  previewUrl,
+  initialLat = 0,
+  initialLng = 0,
+  initialYaw = 0
 }: RealtimeMonitoringProps) {
   const [detections, setDetections] = useState<Detection[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [threshold, setThreshold] = useState(0.70);
   const [recording, setRecording] = useState(false);
   const [rtcFps, setRtcFps] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Initialize coords with values from props (used for image mode)
+  const [liveCoords, setLiveCoords] = useState({ lat: initialLat, lng: initialLng });
+  const [gpsActive, setGpsActive] = useState(false);
+  const liveCoordsRef = useRef({ lat: initialLat, lng: initialLng });
 
   // Video refs - one for local camera, one for remote annotated stream
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -70,11 +83,6 @@ export function RealtimeMonitoring({
   const dataChannelRef = useRef<RTCDataChannel | null>(null);  // For sending config updates
   const trackSavedRef = useRef<Map<string, number>>(new Map());
   const trackLastSeenRef = useRef<Map<string, number>>(new Map());
-
-  // Live GPS coordinates for tracking vehicle position
-  const [liveCoords, setLiveCoords] = useState<{ lat: number; lng: number }>({ lat: 0, lng: 0 });
-  const [gpsActive, setGpsActive] = useState(false);
-  const liveCoordsRef = useRef(liveCoords);  // Ref to avoid stale closure in callbacks
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -137,7 +145,6 @@ export function RealtimeMonitoring({
 
     const detectImage = async () => {
       try {
-        console.log('[image] Starting image detection...');
         setWsConnected(true);
         setRecording(true);
 
@@ -158,7 +165,6 @@ export function RealtimeMonitoring({
         }
 
         const result = await response.json();
-        console.log('[image] Detection result:', result);
 
         // Process detections
         if (result.detections && result.detections.length > 0) {
@@ -176,9 +182,9 @@ export function RealtimeMonitoring({
               x2: d.bbox_xywh[0] + d.bbox_xywh[2],
               y2: d.bbox_xywh[1] + d.bbox_xywh[3]
             },
-            lat: 0,
-            lon: 0,
-            yaw: 0,
+            lat: initialLat,
+            lon: initialLng,
+            yaw: initialYaw,
             source: { type: 'image' },
             thumb_url: '',
             img_w: iw,
@@ -192,6 +198,12 @@ export function RealtimeMonitoring({
 
       } catch (error) {
         console.error('[image] Detection error:', error);
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
+          toast.error('ไม่สามารถเชื่อมต่อ Server ได้', { description: 'กรุณาตรวจสอบว่า Backend และ AI Server ทำงานอยู่' });
+        } else {
+          toast.error('ตรวจจับภาพไม่สำเร็จ', { description: msg });
+        }
       }
     };
 
@@ -212,12 +224,11 @@ export function RealtimeMonitoring({
 
     const startWebRTC = async () => {
       try {
-        console.log('[aiortc] Starting WebRTC connection...');
 
         // Get local camera/video stream
         if (source === 'live') {
           localStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
           });
           localStreamRef.current = localStream;
 
@@ -264,39 +275,17 @@ export function RealtimeMonitoring({
         pc = new RTCPeerConnection({ iceServers });
         pcRef.current = pc;
 
-        // Force H.264 codec for both sending and receiving (match AI server)
-        const setH264Preference = () => {
-          try {
-            const transceivers = pc!.getTransceivers();
-            transceivers.forEach(transceiver => {
-              if (transceiver.sender.track?.kind === 'video' || transceiver.receiver.track?.kind === 'video') {
-                const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs || [];
-                const h264Codecs = codecs.filter(c => c.mimeType.toLowerCase().includes('h264'));
-                if (h264Codecs.length > 0) {
-                  transceiver.setCodecPreferences(h264Codecs);
-                  console.log('[aiortc] Set H.264 codec preference');
-                }
-              }
-            });
-          } catch (e) {
-            console.warn('[aiortc] Could not set H.264 preference:', e);
-          }
-        };
-
         // Create DataChannel for receiving detection metadata (browser creates it)
         const detectionsChannel = pc.createDataChannel("detections", { ordered: false });
         detectionsChannel.onopen = () => {
-          console.log('[aiortc] DataChannel opened');
           dataChannelRef.current = detectionsChannel;  // Store ref for sending config updates
         };
         detectionsChannel.onclose = () => {
-          console.log('[aiortc] DataChannel closed');
           dataChannelRef.current = null;
         };
         detectionsChannel.onmessage = (ev) => {
           try {
             const msg = JSON.parse(ev.data);
-            console.log('[aiortc] DataChannel message:', msg);
 
             // Update FPS
             if (typeof msg?.fps === 'number') {
@@ -323,9 +312,9 @@ export function RealtimeMonitoring({
                     x2: d.bbox_xywh[0] + d.bbox_xywh[2],
                     y2: d.bbox_xywh[1] + d.bbox_xywh[3]
                   },
-                  lat: 0,
-                  lon: 0,
-                  yaw: 0,
+                  lat: liveCoordsRef.current.lat,
+                  lon: liveCoordsRef.current.lng,
+                  yaw: initialYaw,
                   source: { type: source },
                   thumb_url: '',
                   track_id: trackKey,
@@ -387,32 +376,35 @@ export function RealtimeMonitoring({
               const params = sender.getParameters();
               if (params.encodings && params.encodings.length > 0) {
                 // Set higher bitrate and resolution
-                params.encodings[0].maxBitrate = 5000000; // 5 Mbps (increased for better quality)
+                params.encodings[0].maxBitrate = 12000000; // 12 Mbps
                 params.encodings[0].scaleResolutionDownBy = 1.0; // Don't scale down
                 sender.setParameters(params).catch(e => console.warn('setParameters error:', e));
               }
             }
           });
-
-          // Apply H.264 preference after tracks are added
-          setH264Preference();
         }
 
         // Handle connection state changes
         pc.onconnectionstatechange = () => {
-          console.log('[aiortc] Connection state:', pc?.connectionState);
           if (pc?.connectionState === 'connected') {
             setWsConnected(true);
             setRecording(true);
-          } else if (pc?.connectionState === 'failed' || pc?.connectionState === 'disconnected') {
+            setErrorMessage(null);
+          } else if (pc?.connectionState === 'failed') {
             setWsConnected(false);
             setRecording(false);
+            setErrorMessage('การเชื่อมต่อ WebRTC ล้มเหลว');
+            toast.error('การเชื่อมต่อล้มเหลว', { description: 'ไม่สามารถเชื่อมต่อกับ AI Server ได้ กรุณาลองใหม่' });
+          } else if (pc?.connectionState === 'disconnected') {
+            setWsConnected(false);
+            setRecording(false);
+            setErrorMessage('การเชื่อมต่อหลุด');
+            toast.warning('การเชื่อมต่อหลุด', { description: 'WebRTC ถูกตัดการเชื่อมต่อ กรุณาลองใหม่' });
           }
         };
 
         // Handle incoming video track (annotated stream from server)
         pc.ontrack = (event) => {
-          console.log('[aiortc] Received track:', event.track.kind);
 
           if (event.track.kind === 'video' && remoteVideoRef.current) {
             // This is the annotated video stream from AI
@@ -423,7 +415,6 @@ export function RealtimeMonitoring({
         // Handle incoming DataChannel (detection metadata)
         pc.ondatachannel = (event) => {
           const dc = event.channel;
-          console.log('[aiortc] DataChannel received:', dc.label);
 
           dc.onmessage = (ev) => {
             try {
@@ -454,9 +445,9 @@ export function RealtimeMonitoring({
                       x2: d.bbox_xywh[0] + d.bbox_xywh[2],
                       y2: d.bbox_xywh[1] + d.bbox_xywh[3]
                     },
-                    lat: 0,
-                    lon: 0,
-                    yaw: 0,
+                    lat: liveCoordsRef.current.lat,
+                    lon: liveCoordsRef.current.lng,
+                    yaw: initialYaw,
                     source: { type: source },
                     thumb_url: '',
                     track_id: trackKey,
@@ -534,7 +525,6 @@ export function RealtimeMonitoring({
         });
         await pc.setLocalDescription(offer);
 
-        console.log('[aiortc] Sending offer to server...');
 
         // Send offer via Next.js API proxy (to avoid CORS)
         const response = await fetch('/api/webrtc/offer', {
@@ -552,19 +542,29 @@ export function RealtimeMonitoring({
         }
 
         const answer = await response.json();
-        console.log('[aiortc] Received answer from server');
 
         await pc.setRemoteDescription({
           type: answer.type,
           sdp: answer.sdp
         });
 
-        console.log('[aiortc] WebRTC connection established');
 
       } catch (error) {
         console.error('[aiortc] Connection error:', error);
         setWsConnected(false);
         setRecording(false);
+
+        const msg = error instanceof Error ? error.message : '';
+        if (msg.includes('Permission') || msg.includes('NotAllowed') || msg.includes('denied')) {
+          setErrorMessage('ไม่สามารถเข้าถึงกล้องได้');
+          toast.error('ไม่สามารถเข้าถึงกล้อง', { description: 'กรุณาอนุญาตการใช้กล้องใน Browser แล้วลองใหม่' });
+        } else if (msg.includes('Server returned') || msg.includes('fetch') || msg.includes('Failed')) {
+          setErrorMessage('AI Server ไม่ตอบสนอง');
+          toast.error('AI Server ไม่ตอบสนอง', { description: 'กรุณาตรวจสอบว่า AI Server (port 8001) ทำงานอยู่' });
+        } else {
+          setErrorMessage('เชื่อมต่อไม่สำเร็จ');
+          toast.error('เชื่อมต่อไม่สำเร็จ', { description: msg || 'เกิดข้อผิดพลาด กรุณาลองใหม่' });
+        }
       }
     };
 
@@ -609,7 +609,6 @@ export function RealtimeMonitoring({
     if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
       try {
         dataChannelRef.current.send(JSON.stringify({ conf: value }));
-        console.log('[aiortc] Sent threshold update:', value);
       } catch (e) {
         console.warn('[aiortc] Failed to send threshold:', e);
       }
@@ -619,13 +618,30 @@ export function RealtimeMonitoring({
   return (
     <div className="px-8 py-6 max-w-[1920px] mx-auto">
       {!wsConnected && active && source !== 'image' && (
-        <div className="bg-[#FFCC00]/10 border border-[#FFCC00] rounded-lg p-4 mb-4 flex items-center gap-3">
-          <WifiOff className="w-5 h-5 text-[#FFCC00]" />
-          <div className="flex-1">
-            <p className="text-[#FFCC00]">Connecting to AI Server...</p>
-            <p className="text-sm text-[#FFCC00]/70">Establishing WebRTC connection with aiortc</p>
+        errorMessage ? (
+          <div className="bg-[#FF3B30]/10 border border-[#FF3B30] rounded-lg p-4 mb-4 flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#FF3B30] flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-[#FF3B30] font-medium">{errorMessage}</p>
+              <p className="text-sm text-[#FF3B30]/70">กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่</p>
+            </div>
+            <button
+              onClick={() => { setErrorMessage(null); onStop(); setTimeout(() => onStart?.(), 300); }}
+              className="flex items-center gap-2 px-4 py-2 bg-[#FF3B30] hover:bg-[#FF3B30]/80 rounded-lg text-white text-sm transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" />
+              ลองใหม่
+            </button>
           </div>
-        </div>
+        ) : (
+          <div className="bg-[#FFCC00]/10 border border-[#FFCC00] rounded-lg p-4 mb-4 flex items-center gap-3">
+            <WifiOff className="w-5 h-5 text-[#FFCC00]" />
+            <div className="flex-1">
+              <p className="text-[#FFCC00]">Connecting to AI Server...</p>
+              <p className="text-sm text-[#FFCC00]/70">Establishing WebRTC connection with aiortc</p>
+            </div>
+          </div>
+        )
       )}
 
       <div className="flex gap-6">
