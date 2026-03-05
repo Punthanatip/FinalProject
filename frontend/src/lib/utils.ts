@@ -24,17 +24,19 @@ export function formatTime(iso: string): string {
 /** Convert various timestamp formats to ISO string */
 export function toIsoTimestamp(ts: unknown): string {
     if (typeof ts === 'string') return ts;
-    if (Array.isArray(ts)) {
-        const year = ts[0];
-        const ordinal = ts[1];
-        const hour = ts[3] || 0;
-        const minute = ts[4] || 0;
-        const nanos = ts[5] || 0;
+    // Rust time crate OffsetDateTime: [year, ordinal_day, hour, minute, second, nanosecond, ...]
+    if (Array.isArray(ts) && ts.length >= 6) {
+        const year = Number(ts[0]) || new Date().getUTCFullYear();
+        const ordinal = Number(ts[1]) || 1;
+        const hour = Number(ts[2]) || 0;
+        const minute = Number(ts[3]) || 0;
+        const second = Number(ts[4]) || 0;
+        const nanos = Number(ts[5]) || 0;
         const mdays = [31, (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
         let m = 0, dday = ordinal;
         while (m < 12 && dday > mdays[m]) { dday -= mdays[m]; m++; }
         const ms = Math.floor(nanos / 1e6);
-        return new Date(Date.UTC(year, m, dday, hour, minute, Math.floor(ms / 1000), ms % 1000)).toISOString();
+        return new Date(Date.UTC(year, m, dday, hour, minute, second, ms)).toISOString();
     }
     return new Date().toISOString();
 }
