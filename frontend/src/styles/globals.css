@@ -373,7 +373,7 @@ html {
 .banner-gradient {
   background: linear-gradient(135deg, #0a1628 0%, #0f2042 40%, #0c1a35 70%, #091322 100%);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .banner-gradient::before {

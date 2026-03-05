@@ -12,7 +12,7 @@ import {
 
 // ─── Mock / preview mode flag ──────────────────────────────────────────
 // Set to true to run dashboard with mock data (no backend needed)
-const USE_MOCK = true;
+const USE_MOCK = false;
 
 interface DashboardSummary {
   total_24h: number;
@@ -54,11 +54,48 @@ export function Dashboard() {
         const res = await fetch('/api/dashboard/summary');
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
+
+        // Fetch most recent event for "last detection" time
+        let lastDetStr = '-';
+        try {
+          const evtRes = await fetch('/api/events/recent?limit=1');
+          if (evtRes.ok) {
+            const events = await evtRes.json();
+            if (events.length > 0) {
+              const ts = events[0].ts;
+              let eventDate: Date | null = null;
+              if (typeof ts === 'string') {
+                eventDate = new Date(ts);
+              } else if (Array.isArray(ts) && ts.length >= 6) {
+                const year = Number(ts[0]);
+                const ordinal = Number(ts[1]) || 1;
+                const hour = Number(ts[2]) || 0;
+                const minute = Number(ts[3]) || 0;
+                const second = Number(ts[4]) || 0;
+                const nanos = Number(ts[5]) || 0;
+                const mdays = [31, (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+                let m = 0, d = ordinal;
+                while (m < 12 && d > mdays[m]) { d -= mdays[m]; m++; }
+                const ms = Math.floor(nanos / 1e6);
+                eventDate = new Date(Date.UTC(year, m, d, hour, minute, second, ms));
+              }
+              if (eventDate && !isNaN(eventDate.getTime())) {
+                const diffMs = Date.now() - eventDate.getTime();
+                const diffMin = Math.floor(diffMs / 60000);
+                if (diffMin < 1) lastDetStr = 'Just now';
+                else if (diffMin < 60) lastDetStr = `${diffMin} min ago`;
+                else if (diffMin < 1440) lastDetStr = `${Math.floor(diffMin / 60)}h ago`;
+                else lastDetStr = `${Math.floor(diffMin / 1440)}d ago`;
+              }
+            }
+          }
+        } catch { /* ignore */ }
+
         setSummary({
           total_24h: data.total_24h ?? 0,
           avg_conf: data.avg_conf ?? 0,
           top_fod: data.top_fod ?? 'N/A',
-          last_detection: data.last_detection ?? '-',
+          last_detection: lastDetStr,
         });
       } catch {
         setSummary({ total_24h: 0, avg_conf: 0, top_fod: 'N/A', last_detection: '-' });
@@ -103,7 +140,7 @@ export function Dashboard() {
   return (
     <div className="px-8 py-6 max-w-[1920px] mx-auto">
       {/* ─── Welcome Banner ─── */}
-      <div className="banner-gradient rounded-lg p-6 mb-6 fade-in-up" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="banner-gradient rounded-lg p-6 mb-6 fade-in-up" style={{ border: '1px solid rgba(255,255,255,0.06)', position: 'relative', zIndex: 20 }}>
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl" style={{ fontWeight: 700, color: '#fff' }}>
@@ -226,7 +263,7 @@ export function Dashboard() {
           value={summary.last_detection}
           icon={<Clock className="w-5 h-5 text-white" />}
           iconColor="purple"
-          subtitle="Runway 09L"
+          subtitle="Most recent event"
         />
       </div>
 

@@ -387,7 +387,7 @@ export function RealtimeMonitoring({
               const params = sender.getParameters();
               if (params.encodings && params.encodings.length > 0) {
                 // Set higher bitrate and resolution
-                params.encodings[0].maxBitrate = 5000000; // 5 Mbps (increased for better quality)
+                params.encodings[0].maxBitrate = 10000000; // 10 Mbps for sharper quality
                 params.encodings[0].scaleResolutionDownBy = 1.0; // Don't scale down
                 sender.setParameters(params).catch(e => console.warn('setParameters error:', e));
               }

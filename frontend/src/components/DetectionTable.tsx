@@ -50,13 +50,15 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
 
   const toIso = useCallback((ts: unknown): string => {
     if (typeof ts === 'string') return ts;
-    if (Array.isArray(ts)) {
+    // Rust time crate OffsetDateTime serializes as:
+    // [year, ordinal_day, hour, minute, second, nanosecond, offset_h, offset_m, offset_s]
+    if (Array.isArray(ts) && ts.length >= 6) {
       const year: number = Number(ts[0]) || new Date().getUTCFullYear();
       const ordinal: number = Number(ts[1]) || 1;
-      const hour: number = Number(ts[2] ?? ts[3] ?? 0);
-      const minute: number = Number(ts[3] ?? ts[4] ?? 0);
-      const second: number = Number(ts[4] ?? ts[5] ?? 0);
-      const nanos: number = Number(ts[5] ?? ts[6] ?? 0);
+      const hour: number = Number(ts[2]) || 0;
+      const minute: number = Number(ts[3]) || 0;
+      const second: number = Number(ts[4]) || 0;
+      const nanos: number = Number(ts[5]) || 0;
       const mdays = [31, (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
       let m = 0, d = ordinal;
       while (m < 12 && d > mdays[m]) { d -= mdays[m]; m++; }
@@ -183,7 +185,7 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
   return (
     <div className="glass-card overflow-hidden">
       {/* Header */}
-      <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="px-8 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div>
           <h3 style={{ fontWeight: 600 }}>Detection Records</h3>
           <p className="text-xs text-gray-500 mt-0.5">
@@ -219,7 +221,7 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
                 { key: 'confidence' as SortField, label: 'Confidence', sortable: true },
                 { key: null, label: 'Camera', sortable: false },
               ].map((col, i) => (
-                <th key={i} className="px-5 py-3 text-left">
+                <th key={i} className="px-8 py-3 text-left">
                   {col.sortable && col.key ? (
                     <button
                       onClick={() => handleSort(col.key!)}
@@ -263,10 +265,10 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
                     className="table-row-hover"
                     style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}
                   >
-                    <td className="px-5 py-3 text-xs text-gray-400 tabular-nums">
+                    <td className="px-8 py-3 text-xs text-gray-400 tabular-nums">
                       {formatTimestamp(detection.timestamp)}
                     </td>
-                    <td className="px-5 py-3">
+                    <td className="px-8 py-3">
                       <span
                         className="text-xs px-2.5 py-1 rounded-md text-white"
                         style={{
@@ -278,15 +280,15 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
                         {detection.fodType}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-xs text-gray-500 tabular-nums">
+                    <td className="px-8 py-3 text-xs text-gray-500 tabular-nums">
                       {detection.lat.toFixed(4)}, {detection.lon.toFixed(4)}
                     </td>
-                    <td className="px-5 py-3">
+                    <td className="px-8 py-3">
                       <span className={`severity-pill ${severity.cls}`}>
                         {(detection.confidence * 100).toFixed(0)}% · {severity.label}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-xs text-gray-500">
+                    <td className="px-8 py-3 text-xs text-gray-500">
                       {detection.camera}
                     </td>
                   </tr>
@@ -300,19 +302,19 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
       {/* Pagination */}
       {totalPages > 1 && (
         <div
-          className="px-5 py-3 flex items-center justify-between"
+          className="px-8 py-4 flex items-center justify-between"
           style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
         >
-          <span className="text-xs text-gray-500">
+          <span className="text-sm text-gray-500">
             Page {page + 1} of {totalPages} · {filteredData.length} total records
           </span>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setPage(p => Math.max(0, p - 1))}
               disabled={page === 0}
-              className="p-1.5 rounded-md hover:bg-[#2C2C2E] transition-colors disabled:opacity-30"
+              className="p-2.5 rounded-lg hover:bg-[#2C2C2E] transition-colors disabled:opacity-30"
             >
-              <ChevronLeft className="w-4 h-4 text-gray-400" />
+              <ChevronLeft className="w-6 h-6 text-gray-400" />
             </button>
             {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
               let pageNum: number;
@@ -329,12 +331,14 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
                 <button
                   key={pageNum}
                   onClick={() => setPage(pageNum)}
-                  className="w-7 h-7 rounded-md text-xs transition-all"
+                  className="rounded-lg transition-all hover:bg-[#2C2C2E]"
                   style={{
+                    width: '40px',
+                    height: '40px',
                     background: page === pageNum ? '#007BFF' : 'transparent',
                     color: page === pageNum ? '#fff' : '#8E8E93',
                     fontWeight: page === pageNum ? 600 : 400,
-                    fontSize: '0.7rem',
+                    fontSize: '0.9rem',
                   }}
                 >
                   {pageNum + 1}
@@ -344,9 +348,9 @@ export function DetectionTable({ timeZone, selectedClasses, useMock }: Detection
             <button
               onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
               disabled={page >= totalPages - 1}
-              className="p-1.5 rounded-md hover:bg-[#2C2C2E] transition-colors disabled:opacity-30"
+              className="p-2.5 rounded-lg hover:bg-[#2C2C2E] transition-colors disabled:opacity-30"
             >
-              <ChevronRight className="w-4 h-4 text-gray-400" />
+              <ChevronRight className="w-6 h-6 text-gray-400" />
             </button>
           </div>
         </div>

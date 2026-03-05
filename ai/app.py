@@ -45,7 +45,7 @@ try:
 except Exception:
     pass
 
-DEFAULT_MODEL = Path(__file__).parent / "models" / "best.onnx"
+DEFAULT_MODEL = Path(__file__).parent / "models" / "best.pt"
 MODEL_PATH = DEFAULT_MODEL
 MODEL_NAME = MODEL_PATH.name
 IS_ONNX = MODEL_PATH.suffix == ".onnx"
@@ -131,12 +131,13 @@ class AnnotatedVideoTrack(VideoStreamTrack):
                     conf=conf_threshold, 
                     imgsz=640,
                     verbose=False,
+                    stream=True,  # Reuse buffers for faster inference
                 )
                 # ONNX handles device/providers internally; only pass device for PyTorch
                 if not IS_ONNX:
                     predict_kwargs["device"] = DEVICE
                     predict_kwargs["half"] = True
-                results = model.predict(img, **predict_kwargs)
+                results = list(model.predict(img, **predict_kwargs))
                 
                 for box in results[0].boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
@@ -217,17 +218,7 @@ class AnnotatedVideoTrack(VideoStreamTrack):
             except Exception as e:
                 logger.warning(f"DataChannel send error: {e}")
         
-        # Ensure minimum resolution of 720p for better quality
-        MIN_HEIGHT = 720
-        if h < MIN_HEIGHT:
-            scale = MIN_HEIGHT / h
-            new_w = int(w * scale)
-            new_h = MIN_HEIGHT
-            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-            if self._frame_count <= 1:
-                logger.info(f"Upscaled frame from {w}x{h} to {new_w}x{new_h}")
-        
-        # Convert back to VideoFrame with proper pts
+        # Convert back to VideoFrame with proper pts (skip upscaling for performance)
         new_frame = VideoFrame.from_ndarray(img, format="bgr24")
         new_frame.pts = frame.pts
         new_frame.time_base = frame.time_base
@@ -311,7 +302,7 @@ def ready():
 async def detect(
     file: UploadFile = File(...),
     conf: float = Query(0.70, ge=0.0, le=1.0),
-    imgsz: int = Query(832, ge=64, le=2048),
+    imgsz: int = Query(640, ge=64, le=2048),
 ):
     if not READY or model is None:
         raise HTTPException(status_code=503, detail="Model not ready")
@@ -324,7 +315,11 @@ async def detect(
 
     t0 = perf_counter()
     try:
-        res = model.predict(img, conf=conf, imgsz=imgsz, verbose=False, device=DEVICE)
+        predict_kwargs = dict(conf=conf, imgsz=imgsz, verbose=False)
+        if not IS_ONNX:
+            predict_kwargs["device"] = DEVICE
+            predict_kwargs["half"] = True
+        res = model.predict(img, **predict_kwargs)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"inference error: {e}")
     r = res[0]

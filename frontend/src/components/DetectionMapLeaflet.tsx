@@ -121,17 +121,19 @@ function DetectionMapLeaflet({ useMock = false }: DetectionMapLeafletProps) {
 
     const toIso = useCallback((ts: unknown): string => {
         if (typeof ts === 'string') return ts;
-        if (Array.isArray(ts)) {
-            const year = ts[0];
-            const ordinal = ts[1];
-            const hour = ts[3] || 0;
-            const minute = ts[4] || 0;
-            const nanos = ts[5] || 0;
+        // Rust time crate: [year, ordinal_day, hour, minute, second, nanosecond, ...]
+        if (Array.isArray(ts) && ts.length >= 6) {
+            const year = Number(ts[0]) || new Date().getUTCFullYear();
+            const ordinal = Number(ts[1]) || 1;
+            const hour = Number(ts[2]) || 0;
+            const minute = Number(ts[3]) || 0;
+            const second = Number(ts[4]) || 0;
+            const nanos = Number(ts[5]) || 0;
             const mdays = [31, (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             let m = 0, d = ordinal;
             while (m < 12 && d > mdays[m]) { d -= mdays[m]; m++; }
             const ms = Math.floor(nanos / 1e6);
-            return new Date(Date.UTC(year, m, d, hour, minute, Math.floor(ms / 1000), ms % 1000)).toISOString();
+            return new Date(Date.UTC(year, m, d, hour, minute, second, ms)).toISOString();
         }
         return new Date().toISOString();
     }, []);
@@ -244,9 +246,9 @@ function DetectionMapLeaflet({ useMock = false }: DetectionMapLeafletProps) {
                         onClick={() => setShowMarkers(!showMarkers)}
                         className="px-3 py-1.5 rounded-md text-xs transition-all"
                         style={{
-                            background: showMarkers ? 'rgba(0,123,255,0.15)' : 'rgba(255,255,255,0.04)',
+                            background: showMarkers ? 'rgba(0, 0, 0, 0.15)' : 'rgba(255,255,255,0.04)',
                             border: `1px solid ${showMarkers ? 'rgba(0,123,255,0.3)' : 'rgba(255,255,255,0.08)'}`,
-                            color: showMarkers ? '#60a5fa' : '#8E8E93',
+                            color: showMarkers ? '#60a5fa' : '#000000ff',
                             fontWeight: 500,
                             fontSize: '0.7rem',
                         }}
@@ -279,11 +281,11 @@ function DetectionMapLeaflet({ useMock = false }: DetectionMapLeafletProps) {
                             icon={getIcon(det.confidence)}
                         >
                             <Popup>
-                                <div className="min-w-[200px]">
-                                    <h4 className="font-bold text-lg mb-2">{det.class}</h4>
+                                <div className="min-w-[200px]" style={{ color: '#1a1a1a' }}>
+                                    <h4 className="font-bold text-lg mb-2" style={{ color: '#111' }}>{det.class}</h4>
                                     <div className="space-y-1 text-sm">
                                         <div>
-                                            <span className="text-gray-500">Confidence: </span>
+                                            <span style={{ color: '#666' }}>Confidence: </span>
                                             <span style={{
                                                 color: det.confidence >= 0.9 ? '#FF3B30' : det.confidence >= 0.75 ? '#CC9900' : '#0066DD',
                                                 fontWeight: 'bold'
@@ -292,16 +294,16 @@ function DetectionMapLeaflet({ useMock = false }: DetectionMapLeafletProps) {
                                             </span>
                                         </div>
                                         <div>
-                                            <span className="text-gray-500">Time: </span>
-                                            {formatTime(det.ts)}
+                                            <span style={{ color: '#666' }}>Time: </span>
+                                            <span style={{ color: '#333' }}>{formatTime(det.ts)}</span>
                                         </div>
                                         <div>
-                                            <span className="text-gray-500">Location: </span>
-                                            {det.lat.toFixed(6)}, {det.lon.toFixed(6)}
+                                            <span style={{ color: '#666' }}>Location: </span>
+                                            <span style={{ color: '#333' }}>{det.lat.toFixed(6)}, {det.lon.toFixed(6)}</span>
                                         </div>
                                         <div>
-                                            <span className="text-gray-500">Camera: </span>
-                                            {det.camera_id}
+                                            <span style={{ color: '#666' }}>Camera: </span>
+                                            <span style={{ color: '#333' }}>{det.camera_id}</span>
                                         </div>
                                     </div>
                                 </div>

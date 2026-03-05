@@ -194,22 +194,27 @@ export default function LandingPage() {
                         <div className="landing-aurora-wave landing-aurora-wave-3" />
                     </div>
 
-                    {/* Floating particles */}
+                    {/* Floating particles — deterministic positions to avoid SSR hydration mismatch */}
                     <div className="landing-particles">
-                        {Array.from({ length: 30 }).map((_, i) => (
-                            <div
-                                key={i}
-                                className={`landing-particle ${i % 3 === 0 ? 'landing-particle--blue' : i % 3 === 1 ? 'landing-particle--purple' : 'landing-particle--cyan'}`}
-                                style={{
-                                    left: `${Math.random() * 100}%`,
-                                    top: `${Math.random() * 100}%`,
-                                    animationDelay: `${Math.random() * 5}s`,
-                                    animationDuration: `${3 + Math.random() * 4}s`,
-                                    width: `${1.5 + Math.random() * 2.5}px`,
-                                    height: `${1.5 + Math.random() * 2.5}px`,
-                                }}
-                            />
-                        ))}
+                        {Array.from({ length: 30 }).map((_, i) => {
+                            const seed = (n: number) => ((n * 9301 + 49297) % 233280) / 233280;
+                            const s1 = seed(i * 7 + 1), s2 = seed(i * 13 + 2), s3 = seed(i * 17 + 3);
+                            const s4 = seed(i * 23 + 4), s5 = seed(i * 29 + 5), s6 = seed(i * 31 + 6);
+                            return (
+                                <div
+                                    key={i}
+                                    className={`landing-particle ${i % 3 === 0 ? 'landing-particle--blue' : i % 3 === 1 ? 'landing-particle--purple' : 'landing-particle--cyan'}`}
+                                    style={{
+                                        left: `${s1 * 100}%`,
+                                        top: `${s2 * 100}%`,
+                                        animationDelay: `${s3 * 5}s`,
+                                        animationDuration: `${3 + s4 * 4}s`,
+                                        width: `${1.5 + s5 * 2.5}px`,
+                                        height: `${1.5 + s6 * 2.5}px`,
+                                    }}
+                                />
+                            );
+                        })}
                     </div>
 
                     {/* Orbital rings */}
@@ -252,16 +257,16 @@ export default function LandingPage() {
 
                     {/* Subtitle */}
                     <p className="landing-subtitle fade-in-up" style={{ animationDelay: '0.45s' }}>
-                        Real-time Foreign Object Debris detection powered by YOLOv8 AI.
+                        Real-time Foreign Object Debris detection powered by YOLO models.
                         <br />
                         Protect aircraft, save lives, ensure runway safety 24/7.
                     </p>
 
                     {/* CTA Buttons */}
                     <div className="landing-cta-group fade-in-up" style={{ animationDelay: '0.55s' }}>
-                        <Link href="/monitoring" className="landing-btn-primary">
+                        <Link href="/input" className="landing-btn-primary">
                             <Play className="w-4 h-4" />
-                            Start Monitoring
+                            Start
                             <ChevronRight className="w-4 h-4" />
                         </Link>
                         <Link href="/dashboard" className="landing-btn-secondary">
