@@ -1,132 +1,130 @@
-# FOD Detection System — สรุปการทำงานทั้งโปรเจค
+# ภาพรวมโปรเจค FOD Detection System
 
-## โปรเจคนี้คืออะไร?
+## โปรเจคนี้คืออะไร
 
-ระบบ FOD Detection (Foreign Object Debris) คือระบบตรวจจับวัตถุแปลกปลอม เช่น ค้อน สกรู น็อต เศษโลหะ แบบ real-time ผ่านกล้อง วิดีโอ หรือภาพนิ่ง โดยใช้ AI model ชื่อ YOLO ประมวลผลบน GPU แล้วแสดงผลบน web browser
+ระบบ FOD Detection (Foreign Object Debris Detection) คือระบบตรวจจับวัตถุแปลกปลอมบนรันเวย์สนามบินแบบ real-time วัตถุประสงค์คือเพิ่มความปลอดภัยในการบิน เนื่องจากเศษวัตถุบนรันเวย์เช่น น็อต สกรู เศษโลหะ หิน สายไฟ อาจสร้างความเสียหายร้ายแรงต่อเครื่องยนต์เครื่องบินได้ ระบบใช้กล้องที่ติดตั้งบนรถตรวจสอบที่วิ่งไปตามรันเวย์ AI model ชื่อ YOLO ทำการตรวจจับวัตถุแบบ real-time บน GPU และแสดงผลผ่านหน้าเว็บให้เจ้าหน้าที่เห็นได้ทันที
 
-ระบบประกอบด้วย 4 ส่วนหลัก ทำงานร่วมกันดังนี้:
+---
 
-1. Frontend (Next.js) — หน้าเว็บที่ user ใช้งาน
-2. AI Server (Python + FastAPI + YOLO) — ประมวลผล AI detect วัตถุ
-3. Backend (Rust + Axum) — API gateway เชื่อมทุกส่วน + จัดการ database
-4. Database (PostgreSQL) — เก็บข้อมูล detection events
+## สถาปัตยกรรมระบบ
 
-## สถาปัตยกรรมภาพรวม
+ระบบโดยรวมแบ่งเป็น 4 ส่วนใหญ่ที่ทำงานร่วมกัน
 
-ระบบมี 4 ส่วนเชื่อมต่อกันแบบนี้:
+**Frontend** คือส่วนหน้าเว็บที่ผู้ใช้โต้ตอบด้วย พัฒนาด้วย Next.js framework ซึ่งใช้ React สำหรับ UI และ TypeScript เป็นภาษาหลัก ทำงานที่ port 3000 Frontend มีหน้า Input ให้ผู้ใช้เลือกโหมดและกรอกพิกัด GPS หน้า Monitoring แสดงวิดีโอ real-time พร้อม detection overlay และหน้า Dashboard แสดงสถิติและแผนที่
 
-- Browser (port 3000) สื่อสารกับ Rust Backend (port 8000) ผ่าน REST API โดยมี Next.js API Routes เป็น proxy
-- Browser สื่อสารกับ AI Server (port 8001) ผ่าน WebRTC โดยตรง สำหรับส่งวิดีโอ real-time
-- Rust Backend เชื่อมต่อกับ AI Server ผ่าน HTTP สำหรับ image detection
-- Rust Backend เชื่อมต่อกับ PostgreSQL สำหรับอ่าน/เขียนข้อมูล
+**AI Server** คือหัวใจของระบบ พัฒนาด้วย Python ใช้ FastAPI framework และ aiortc library สำหรับ WebRTC ทำงานที่ port 8001 โหลด YOLO model ที่ train มาเฉพาะสำหรับ FOD detection (ไฟล์ best.pt) รัน inference บน GPU ด้วย CUDA และ PyTorch
 
-## ส่วนที่ 1: Frontend — Next.js (TypeScript)
+**Backend** พัฒนาด้วยภาษา Rust ใช้ Axum web framework ทำงานที่ port 8000 ทำหน้าที่เป็น API gateway เชื่อมระหว่าง Frontend กับ AI Server และ Database ไม่ได้รัน AI โดยตรง
 
-Frontend เป็นหน้าเว็บที่ user ใช้งาน สร้างด้วย Next.js framework ใช้ TypeScript เป็นภาษาหลัก อยู่ในโฟลเดอร์ frontend/src
+**Database** ใช้ PostgreSQL 16 รันใน Docker container ทำงานที่ port 5432 เก็บข้อมูล detection events ทั้งหมด
 
-มี 3 หน้าหลัก:
+---
 
-### หน้า Input (InputControl.tsx)
-ให้ user เลือกแหล่งวิดีโอ 3 แบบ ได้แก่ Live Camera (เปิดกล้อง webcam), Video File (อัพโหลดไฟล์วิดีโอ), หรือ Image (อัพโหลดภาพนิ่ง) แล้วกดปุ่ม START DETECTION เพื่อเริ่มตรวจจับ
+## สาม Detection Mode
 
-### หน้า Monitoring (RealtimeMonitoring.tsx)
-เป็นหน้าหลักสำหรับแสดงวิดีโอ real-time ที่มี bounding box วาดรอบวัตถุที่ detect ได้ มี Event Log แสดงรายการ detection ด้านขวา มี FPS counter มุมบนขวา มีตัวปรับ confidence threshold แบบ slider และมีปุ่ม STOP สำหรับหยุดการตรวจจับ
+**Live Camera Mode** ใช้กล้อง webcam ของอุปกรณ์ browser เปิดกล้องผ่าน WebRTC API ส่ง video stream แบบ real-time ไปยัง AI Server ที่รัน YOLO ประมวลผลทุกเฟรม วาด bounding box บนเฟรมแล้วส่งกลับมาแสดง เหมาะสำหรับการตรวจสอบ live บนรถที่มี laptop และกล้อง USB
 
-### หน้า Dashboard (Dashboard.tsx)
-แสดงข้อมูลสรุปจาก database ประกอบด้วย KPI Cards (จำนวน detect 24 ชม., avg confidence, FOD type ที่พบบ่อยที่สุด), กราฟ timeline แสดง detection ต่อชั่วโมง, กราฟ distribution แสดงสัดส่วน FOD แต่ละประเภท, แผนที่ Leaflet แสดงตำแหน่ง GPS ของ detection, และตาราง detection history
+**Video File Mode** ใช้ไฟล์วิดีโอที่อัพโหลด ใช้ WebRTC pipeline เดียวกับ Live mode แต่แทนที่กล้องด้วย HTML5 video element ที่เล่นไฟล์วิดีโอแล้วดึง stream มาผ่าน captureStream() API เหมาะสำหรับวิเคราะห์วิดีโอที่บันทึกไว้แล้ว
 
-### Next.js API Routes
-Frontend มี API Routes ที่ทำหน้าที่เป็น proxy ส่งต่อ request จาก browser ไปหา Backend หรือ AI Server เพื่อหลีกเลี่ยงปัญหา CORS ได้แก่ /api/detect (ส่งภาพไป detect), /api/webrtc/offer (WebRTC signaling), /api/events/ingest (บันทึก event), /api/events/recent (ดึง event ล่าสุด), /api/dashboard/summary (ดึงสรุป 24 ชม.), /api/health (เช็คสถานะทุก service)
+**Image Mode** ใช้ภาพนิ่งที่อัพโหลด ส่งผ่าน REST API ธรรมดาไม่ใช้ WebRTC AI Server รัน YOLO ครั้งเดียวส่ง JSON detections กลับ browser วาด bounding box ฝั่ง client เหมาะสำหรับวิเคราะห์ภาพเดี่ยว
 
-## ส่วนที่ 2: AI Server — FastAPI + YOLO + aiortc (Python)
+---
 
-AI Server อยู่ในไฟล์ ai/app.py เป็นหัวใจหลักของระบบ ทำ 2 งาน:
+## การทำงานของ YOLO AI
 
-### งานที่ 1: REST API สำหรับ Image Mode
-เมื่อ user อัพโหลดภาพ ระบบจะรับภาพผ่าน endpoint POST /v1/detect แล้วส่งเข้า YOLO model ที่รันบน GPU ได้ผลลัพธ์เป็น JSON ประกอบด้วยชื่อวัตถุ (เช่น Hammer), ค่า confidence (เช่น 0.93), และตำแหน่ง bounding box
+เมื่อ AI Server ได้รับ video frame จาก WebRTC จะแปลงเป็น numpy array ด้วย OpenCV แล้วส่งเข้า model.predict() บน GPU การประมวลผลรันใน asyncio thread pool เพื่อไม่ block event loop ของ aiortc
 
-### งานที่ 2: WebRTC สำหรับ Video/Live Mode
-สำหรับโหมด real-time ระบบใช้ aiortc ซึ่งเป็น WebRTC library สำหรับ Python ขั้นตอนคือ:
+YOLO return รายการวัตถุที่พบแต่ละรายการมี class name (เช่น Hammer, Bolt, Screw), confidence score (0.0 ถึง 1.0) และ bounding box coordinates AI Server วาด bounding box บนเฟรมด้วย OpenCV โดยสีขึ้นกับ confidence level สีแดงสำหรับ critical (มากกว่า 90%), สีเหลืองสำหรับ warning (มากกว่า 75%), สีน้ำเงินสำหรับ normal (ต่ำกว่า 75%) และแสดง label เป็น class name พร้อม confidence percentage
 
-1. Browser ส่ง SDP Offer มาที่ POST /webrtc/offer
-2. AI Server สร้าง RTCPeerConnection และ AnnotatedVideoTrack
-3. ส่ง SDP Answer กลับ → WebRTC connected
-4. Browser ส่ง video frame ทุกๆ 33ms (30fps) ผ่าน WebRTC
-5. AI Server รับเฟรม แปลงเป็น numpy array ด้วย OpenCV
-6. ส่งเข้า YOLO predict บน GPU ด้วย FP16 precision (half=True) ที่ imgsz=640
-7. วาด bounding box และ label บนเฟรมด้วย OpenCV (cv2.rectangle, cv2.putText)
-8. สีของ bbox ขึ้นกับ confidence: แดง (>=90%), เหลือง (>=75%), น้ำเงิน (<75%)
-9. วาด FPS counter มุมบนซ้าย
-10. ส่งเฟรมที่วาดแล้วกลับ browser ผ่าน WebRTC
-11. ส่ง detection metadata (JSON) ผ่าน DataChannel ไปให้ browser
+YOLO ใช้ FP16 precision (half=True) บน GPU ทำให้เร็วขึ้นประมาณ 30 เปอร์เซ็นต์เทียบกับ FP32 ใช้ image size 640 pixels ซึ่งเป็น balance ระหว่างความเร็วและความแม่นยำ ถ้าภาพเล็กกว่า 720 pixels จะ upscale ก่อนด้วย INTER_LANCZOS4 interpolation เพื่อคุณภาพ
 
-Class สำคัญคือ AnnotatedVideoTrack ที่สืบทอดจาก VideoStreamTrack ของ aiortc โดย method recv() จะถูกเรียกทุกเฟรม ทำหน้าที่รับเฟรม → process YOLO → วาด bbox → ส่งกลับ
+---
 
-Video codec ที่ใช้คือ VP8 ซึ่งเป็น default ของ WebRTC encode/decode แบบ software บน CPU
+## WebRTC — เทคโนโลยีส่งวิดีโอ Real-time
 
-## ส่วนที่ 3: Backend — Rust + Axum
+WebRTC (Web Real-Time Communication) คือ standard ของ browser สำหรับส่งวิดีโอ เสียง และข้อมูลแบบ real-time ระหว่าง peers โดยตรง in ระบบนี้ browser เป็น peer หนึ่งและ AI Server (aiortc) เป็นอีก peer หนึ่ง
 
-Backend อยู่ในไฟล์ backend/src/main.rs และ backend/src/db.rs เขียนด้วยภาษา Rust ใช้ Axum framework รัน port 8000
+กระบวนการ WebRTC เริ่มด้วย signaling คือการ exchange SDP (Session Description Protocol) ที่อธิบายว่าจะส่งวิดีโออะไรและยังไง browser ส่ง SDP offer และ AI Server ส่ง SDP answer กลับ จากนั้น WebRTC ทำ ICE (Interactive Connectivity Establishment) เพื่อหาเส้นทาง network ที่เหมาะสมที่สุด เมื่อ connect สำเร็จวิดีโอจะไหลผ่าน UDP protocol ซึ่งเร็วกว่า TCP เพราะไม่ต้อง wait ให้ packet หายไปถูก resend
 
-ทำหน้าที่เป็นตัวกลาง (API gateway) ระหว่าง Frontend กับ AI Server และ Database:
+วิดีโอ encode ด้วย VP8 codec ซึ่งเป็น default ของ WebRTC บน browser ระบบตั้ง bitrate ไว้ที่ 12 Mbps ทั้งสองทิศทาง (browser ไป AI Server และ AI Server กลับ browser) ผ่านการ patch SDP และ RTCRtpSender.setParameters()
 
-- POST /infer และ POST /proxy/detect: รับภาพจาก frontend ส่งต่อไป AI Server (/v1/detect) แล้วบันทึกผลลง DB ถ้า save=true
-- POST /events/ingest: รับ detection event จาก frontend (WebRTC mode) แล้วบันทึกลง DB โดย get_or_create_class() จะสร้าง FOD class ใหม่อัตโนมัติถ้ายังไม่มี
-- GET /events/recent: ดึง events ล่าสุดเรียงตาม timestamp DESC
-- GET /events/query: query events ตาม class name
-- GET /dashboard/summary: ดึงสรุป 24 ชม. (total detections, avg confidence, top FOD type)
-- GET /health, /health/ai, /health/ai-ready, /health/db: health check ทุก service
+DataChannel ในระบบชื่อ "detections" ใช้ส่ง JSON text data คู่กับ video stream AI Server ส่ง detection metadata ทุกเฟรมที่มีผลลัพธ์ และ browser ส่ง config updates (เช่นการปรับ threshold) กลับไป
 
-ใช้ SQLx library สำหรับเชื่อมต่อ PostgreSQL แบบ type-safe และ async
+---
 
-## ส่วนที่ 4: Database — PostgreSQL 16 (Docker)
+## ระบบ GPS และ Geolocation
 
-Database รัน PostgreSQL 16 ใน Docker container Schema อยู่ในไฟล์ db/init/02-schema.sql
+ระบบบันทึกพิกัดทางภูมิศาสตร์ (latitude, longitude) และ yaw angle (ทิศทางที่กล้องหัน) ไปพร้อมกับทุก detection event เพื่อให้ทราบว่าพบวัตถุที่ตำแหน่งไหนบนรันเวย์
 
-มี 2 ตาราง:
+ตอนเปิดหน้า Input ระบบ auto-fill พิกัดจาก GPS ของอุปกรณ์ผ่าน navigator.geolocation.getCurrentPosition() ถ้าผู้ใช้ไม่อนุญาต GPS จะใช้พิกัด default ของสนามบินสุวรรณภูมิ ผู้ใช้ยังสามารถแก้ไขพิกัดและ yaw ด้วยตัวเองได้
 
-### ตาราง fod_classes
-เก็บประเภทวัตถุ FOD มีฟิลด์ id (serial primary key), name (ชื่อ class เช่น Bolt, Nut, Hammer ไม่ซ้ำกัน), description (คำอธิบาย), created_at (timestamp) มี default classes 12 ประเภท เช่น Bolt, Nut, Screw, Wire, Scrap Metal, Stone, Paper, Plastic, Glass, Cloth, Tire Pieces, Other
+ใน Live mode ระบบใช้ navigator.geolocation.watchPosition() เพื่ออัพเดทพิกัด real-time ตามที่รถเคลื่อนที่ ค่าพิกัดล่าสุดจะถูกใช้เมื่อบันทึก detection event ลงฐานข้อมูล ทำให้ map ใน Dashboard แสดงตำแหน่งที่พบวัตถุได้ถูกต้อง
 
-### ตาราง events
-เก็บ detection events มีฟิลด์ id (UUID primary key), ts (timestamp ที่ detect), class_id (foreign key ไป fod_classes), object_count (จำนวนวัตถุ), confidence (ค่าความมั่นใจ 0-1), latitude/longitude (พิกัด GPS), source (แหล่งที่มา เช่น monitoring), source_ref (reference เช่น live_feed), bbox (bounding box เป็น JSONB), meta (metadata เพิ่มเติมเป็น JSONB)
+---
 
-มี indexes สำหรับ performance: idx_events_ts_desc, idx_events_class_id, idx_events_source_ref
+## ฐานข้อมูล PostgreSQL
 
-## Flow การทำงาน: Live Mode (กล้อง real-time)
+มีสองตารางหลัก
 
-1. User เลือก Live Camera แล้วกด Start
-2. Browser เปิดกล้อง getUserMedia 1280x720 30fps
-3. Browser สร้าง RTCPeerConnection + DataChannel
-4. Browser ส่ง SDP Offer ไป AI Server ผ่าน POST /api/webrtc/offer
-5. AI Server สร้าง PeerConnection + AnnotatedVideoTrack แล้วส่ง SDP Answer กลับ
-6. WebRTC connected — เริ่มส่งวิดีโอ
-7. ทุกเฟรม (30fps): Browser ส่ง video frame → AI Server รับ → YOLO detect บน GPU → วาด bbox → ส่ง annotated frame กลับ + ส่ง detection JSON ผ่าน DataChannel
-8. Browser แสดงวิดีโอที่มี bbox + อัพเดท EventLog + แสดง FPS
-9. ทุก 10 วินาที/class: Browser ส่ง POST /api/events/ingest ไปบันทึกลง DB
-10. Dashboard ดึงข้อมูลจาก DB แสดง KPI กราฟ แผนที่ ตาราง
+**fod_classes** เก็บประเภทวัตถุ FOD ที่ระบบรู้จัก มี primary key id (serial), name (unique, เช่น Bolt/Nut/Screw), description และ created_at ระบบมี default 12 class ที่สร้างตอนเริ่มต้น และสร้างใหม่อัตโนมัติถ้า YOLO detect class ที่ไม่มีในระบบ
 
-## Flow การทำงาน: Image Mode (ภาพนิ่ง)
+**events** เก็บทุก detection event มี id (UUID), ts (timestamp ที่พบ), class_id (foreign key ไปยัง fod_classes), object_count, confidence (0.0-1.0), latitude, longitude (พิกัด GPS), source (เช่น "monitoring"), source_ref (reference ID), bbox (bounding box เป็น JSONB), meta (metadata เพิ่มเติม JSONB) มี indexes ที่ ts, class_id และ source_ref เพื่อ query performance
 
-1. User อัพโหลดภาพ
-2. Browser ส่ง POST /api/detect (multipart/form-data)
-3. Next.js proxy ไป Rust Backend POST /proxy/detect
-4. Rust Backend proxy ไป AI Server POST /v1/detect
-5. AI Server รัน YOLO predict บน GPU → ส่ง JSON กลับ
-6. Browser วาด bounding box บนภาพด้วย BoundingBox component
-7. แสดงผลใน EventLog
+ระบบทำ deduplication ไม่บันทึก event ซ้ำถ้าพบวัตถุ class เดิมในเวลา 10 วินาทีที่แหล่งเดิม
 
-## Flow การทำงาน: Video Mode (ไฟล์วิดีโอ)
+---
 
-เหมือน Live Mode ทุกอย่าง แต่แทนที่จะเปิดกล้อง จะสร้าง video element โหลดไฟล์วิดีโอ แล้วใช้ captureStream() ดึง stream จากวิดีโอ ส่งเข้า WebRTC pipeline เหมือน Live Mode
+## Dashboard และการแสดงผลสถิติ
 
-## Tech Stack
+Dashboard ดึงข้อมูลจาก database ผ่าน Rust Backend แสดง KPI Cards บอกจำนวน detections ใน 24 ชั่วโมงล่าสุด ค่าเฉลี่ย confidence และ FOD type ที่พบมากที่สุด มีกราฟ timeline ด้วย Recharts แสดง detection trend, pie chart แสดงสัดส่วน FOD แต่ละประเภท, Leaflet map แสดง marker บนแผนที่โลกตามพิกัด GPS และ heatmap แสดงความหนาแน่น และตาราง detection history แสดงรายละเอียดทุก event
 
-- Frontend: Next.js + TypeScript (port 3000)
-- Backend: Rust + Axum + SQLx (port 8000)
-- AI: Python + FastAPI + YOLO + aiortc (port 8001)
-- Database: PostgreSQL 16 (port 5432, Docker)
-- Infrastructure: Docker Compose
-- Video Codec: VP8 (WebRTC default)
-- AI Model: YOLOv8 custom trained (best.pt, FP16 on GPU)
-- Map: Leaflet.js
+---
+
+## การออกแบบที่สำคัญและเหตุผล
+
+ระบบเลือกให้ AI Server วาด bounding box บน server-side แทนที่จะส่งแค่ JSON bbox กลับไปให้ browser วาดเอง เพราะกล้องบนรถเคลื่อนที่ทำให้วัตถุในเฟรมเปลี่ยนตำแหน่งตลอด ถ้า browser วาดเอง bbox อาจไม่ตรงกับตำแหน่งวัตถุในเฟรมปัจจุบันเนื่องจาก latency
+
+ระบบเลือกใช้ VP8 codec แทน H.264 เพราะ aiortc รองรับ VP8 ได้ดีกว่าและ encode เร็วบน software โดยไม่ต้องการ GPU encoder
+
+WebRTC signaling ไม่ผ่าน Rust Backend เพราะ WebRTC video stream เป็น UDP ไม่ใช่ HTTP Rust ไม่สามารถ relay UDP stream ได้ จึง proxy แค่ HTTP signaling ผ่าน Next.js และให้ video stream เชื่อมตรงระหว่าง browser กับ AI Server
+
+Rust Backend เลือกภาษา Rust สำหรับ API layer เพราะ performance สูงมาก memory safe โดยไม่มี garbage collector เหมาะสำหรับ concurrent HTTP requests จำนวนมาก
+
+วิดีโอ encode 2 รอบในสาย WebRTC (browser encode ก่อนส่ง, AI encode ก่อนส่งกลับ) ทำให้คุณภาพลดลงเล็กน้อย แต่เป็น trade-off ที่ยอมรับได้เพราะสามารถใช้ webcam ของ laptop ธรรมดาโดยไม่ต้องมี IP Camera หรือ RTSP server
+
+---
+
+## เทคโนโลยีที่ใช้ทั้งหมด
+
+Frontend ใช้ Next.js, TypeScript, React, Recharts สำหรับ chart, Leaflet.js และ leaflet.heat สำหรับแผนที่, Radix UI components, Tailwind CSS สำหรับ styling, Sonner สำหรับ toast notifications
+
+AI Server ใช้ Python 3.10+, FastAPI, aiortc (WebRTC สำหรับ Python), PyTorch (CUDA FP16), Ultralytics YOLO, OpenCV (cv2), numpy, av (สำหรับ VideoFrame)
+
+Backend ใช้ Rust, Axum web framework, SQLx (type-safe async ORM), tokio (async runtime), reqwest (HTTP client), serde (JSON serialization), uuid, time
+
+Database ใช้ PostgreSQL 16 บน Docker, docker-compose สำหรับ container management
+
+---
+
+## ปัญหาที่ระบบนี้แก้ไข
+
+FOD (Foreign Object Debris) บนรันเวย์เป็นหนึ่งในสาเหตุหลักของอุบัติเหตุทางการบิน เศษวัตถุเล็กน้อยอย่างน็อตหรือสกรูที่ถูกดูดเข้าเครื่องยนต์ไอพ่นสามารถทำให้เครื่องยนต์เสียหายหนักและเป็นอันตรายถึงชีวิตได้ ปัจจุบันการตรวจสอบรันเวย์ส่วนใหญ่ยังพึ่งการตรวจสอบด้วยสายตาของเจ้าหน้าที่ ซึ่งช้า ไม่ครอบคลุม และขึ้นกับความสามารถของคน
+
+ระบบนี้แก้ปัญหาด้วยการใช้กล้องและ AI ตรวจสอบรันเวย์แบบ real-time ขณะที่รถตรวจสอบวิ่งไปตามรันเวย์ ระบบตรวจจับวัตถุได้เร็วกว่าสายตามนุษย์ บันทึกพิกัด GPS ของทุก detection ทำให้เจ้าหน้าที่รู้ตำแหน่งที่แน่นอน และมี dashboard แสดงสถิติในแต่ละวันให้ผู้บริหารติดตามได้
+
+---
+
+## วัตถุที่ระบบสามารถตรวจจับได้
+
+YOLO model ที่ใช้ (best.pt) ถูก train มาเพื่อตรวจจับ FOD ที่พบบ่อยบนรันเวย์โดยเฉพาะ ระบบรองรับ FOD 12 ประเภทที่ default ได้แก่ Bolt (น็อตหัวสกรู), Nut (น็อตหกเหลี่ยม), Screw (สกรู), Wire (เศษสายไฟ), Scrap Metal (เศษโลหะ), Stone (หิน/กรวด), Paper (กระดาษ/กล่อง), Plastic (พลาสติก), Glass (เศษแก้ว), Cloth (ผ้า/วัสดุผ้า), Tire Pieces (ชิ้นส่วนยาง) และ Other (วัตถุแปลกปลอมอื่นๆ) ระบบยังสร้าง class ใหม่อัตโนมัติถ้า YOLO detect วัตถุที่ไม่อยู่ในรายการ
+
+แต่ละ detection มีค่า confidence score ที่บอกว่า YOLO มั่นใจแค่ไหน สีของ bounding box บนวิดีโอสะท้อนระดับความเชื่อมั่น สีแดงหมายถึงแน่ใจมากกว่า 90 เปอร์เซ็นต์ สีเหลืองหมายถึงแน่ใจ 75 ถึง 90 เปอร์เซ็นต์ และสีน้ำเงินหมายถึงต่ำกว่า 75 เปอร์เซ็นต์ ผู้ใช้สามารถปรับ threshold ได้ real-time ผ่าน slider ใน monitoring page โดยไม่ต้อง restart ระบบ
+
+---
+
+## ข้อจำกัดของระบบและงานที่จะพัฒนาต่อ
+
+ข้อจำกัดที่มีอยู่ในปัจจุบันคือคุณภาพวิดีโอลดลงเล็กน้อยจากการ encode VP8 สองรอบในสาย WebRTC ระบบยังไม่รองรับ IP Camera หรือ RTSP stream โดยตรงต้องผ่าน browser การบันทึก detection ใช้ deduplication แบบง่ายคือ 10 วินาทีต่อ class ซึ่งอาจพลาด event ถ้ารถวิ่งผ่านวัตถุเดิมสองรอบ นอกจากนี้ระบบต้องมี internet connection สำหรับ WebRTC ICE ในกรณีที่ browser กับ AI Server ไม่ได้อยู่ใน network เดียวกัน
+
+งานที่จะพัฒนาต่อได้แก่ การ train YOLO model เพิ่มเติมด้วย dataset ของรันเวย์จริงเพื่อความแม่นยำสูงขึ้น การเพิ่ม object tracking เพื่อติดตามวัตถุเดิมข้ามหลายเฟรมและลด false detection การรองรับ IP Camera ผ่าน RTSP โดยตรงบน AI Server การ export รายงาน PDF สำหรับเจ้าหน้าที่ และการเพิ่ม alert system แจ้งเตือนผ่าน SMS หรือ email เมื่อพบ FOD ที่มี confidence สูง
+
