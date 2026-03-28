@@ -85,7 +85,6 @@ async fn main() {
         .route("/health/ai", get(ai_health))
         .route("/health/ai-ready", get(ai_ready))
         .route("/health/db", get(db_health))
-        .route("/infer", post(infer))
         .route("/proxy/detect", post(proxy_detect))
         .route("/dashboard/summary", get(dashboard_summary))
         .route("/events/recent", get(recent_events))
@@ -160,18 +159,6 @@ async fn send_to_ai(client: &Client, url: &str, bytes: bytes::Bytes, filename: S
 }
 
 // ==================== AI Inference Endpoints ====================
-
-async fn infer(
-    State(state): State<AppState>,
-    Query(params): Query<SaveParams>,
-    mut mp: Multipart,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let (bytes, filename) = extract_file(&mut mp, "upload.jpg").await?;
-    let url = build_ai_url(&state.ai_base, "v1/detect", params.conf, params.imgsz);
-    let result = send_to_ai(&state.http, &url, bytes, filename).await?;
-    maybe_save(&state, &result, &params).await?;
-    Ok(Json(result))
-}
 
 async fn proxy_detect(
     State(state): State<AppState>,

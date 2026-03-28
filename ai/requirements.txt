@@ -1,11 +1,17 @@
-fastapi
-uvicorn[standard]
-pydantic
+# ==================== Core API ====================
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+
+# ==================== AI / CV ====================
+# NOTE: torch & torchvision must be installed separately with CUDA support:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ultralytics==8.3.0
-opencv-python
-numpy
-python-multipart
-# WebRTC dependencies for aiortc server
-aiortc>=1.5.0
+opencv-python>=4.9.0
+numpy>=1.26.0
+
+# ==================== WebRTC (aiortc) ====================
+aiortc>=1.9.0
 aiohttp>=3.9.0
-av>=10.0.0
+av>=12.0.0
