@@ -119,13 +119,16 @@ class AnnotatedVideoTrack(VideoStreamTrack):
         
         if model is not None and READY:
             try:
-                results = model.predict(
-                    img, 
-                    conf=conf_threshold, 
+                # ByteTracker: persist=True maintains track IDs across frames
+                results = model.track(
+                    img,
+                    conf=conf_threshold,
                     imgsz=640,
-                    verbose=False, 
+                    verbose=False,
                     device=DEVICE,
-                    half=True  # FP16 inference - ~30% faster on GPU
+                    half=True,         # FP16 inference - ~30% faster on GPU
+                    persist=True,      # Keep track IDs across frames (ByteTracker)
+                    tracker="bytetrack.yaml"  # Use ByteTracker (bundled in ultralytics)
                 )
                 
                 for box in results[0].boxes:
@@ -133,18 +136,20 @@ class AnnotatedVideoTrack(VideoStreamTrack):
                     cls_id = int(box.cls.item())
                     cls_name = results[0].names.get(cls_id, str(cls_id))
                     conf = float(box.conf.item())
+                    # ByteTracker assigns persistent track_id per object across frames
+                    track_id = int(box.id.item()) if box.id is not None else None
                     
                     color = self.get_severity_color(conf)
                     cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
                     
-                    label = f"{cls_name} {conf:.0%}"
+                    label = f"#{track_id} {cls_name} {conf:.0%}" if track_id is not None else f"{cls_name} {conf:.0%}"
                     (label_w, label_h), baseline = cv2.getTextSize(
                         label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
                     )
                     cv2.rectangle(
-                        img, 
-                        (x1, y1 - label_h - baseline - 5), 
-                        (x1 + label_w + 5, y1), 
+                        img,
+                        (x1, y1 - label_h - baseline - 5),
+                        (x1 + label_w + 5, y1),
                         color, -1
                     )
                     cv2.putText(
@@ -155,6 +160,7 @@ class AnnotatedVideoTrack(VideoStreamTrack):
                     detections_list.append({
                         "cls": cls_name,
                         "conf": conf,
+                        "track_id": str(track_id) if track_id is not None else None,
                         "bbox_xywh": [x1, y1, x2 - x1, y2 - y1],
                         "bbox_xywh_norm": [x1/w, y1/h, (x2-x1)/w, (y2-y1)/h],
                     })

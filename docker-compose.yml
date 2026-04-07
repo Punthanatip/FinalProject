@@ -24,7 +24,7 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: postgres://postgres:pass@db:5432/fod
-      AI_BASE_URL: http://ai:8001
+      AI_BASE_URL: http://host.docker.internal:8081
       RUST_LOG: info
       PORT: "8000"
     ports:

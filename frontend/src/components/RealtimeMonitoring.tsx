@@ -298,13 +298,14 @@ export function RealtimeMonitoring({
               const ih = Number(msg.img_h) || 720;
 
               msg.detections.forEach((d: any, idx: number) => {
-                const trackKey = `frame-${msg.frame_id || Date.now()}-${idx}`;
+                // Use ByteTracker track_id as stable key; fallback to class name
+                const stableKey = d.track_id ? `track-${d.track_id}` : `class-${d.cls || idx}`;
                 const classKey = d.cls || 'object';
 
                 const det: Detection = {
-                  id: `class-${classKey}`,
+                  id: stableKey,
                   ts: msg.ts || new Date().toISOString(),
-                  class: d.cls || 'object',
+                  class: classKey,
                   confidence: typeof d.conf === 'number' ? d.conf : 0.8,
                   bbox: {
                     x1: d.bbox_xywh[0],
@@ -317,30 +318,30 @@ export function RealtimeMonitoring({
                   yaw: initialYaw,
                   source: { type: source },
                   thumb_url: '',
-                  track_id: trackKey,
+                  track_id: d.track_id ?? undefined,
                   img_w: iw,
                   img_h: ih,
                   fps: msg.fps
                 };
 
-                trackLastSeenRef.current.set(trackKey, Date.now());
+                trackLastSeenRef.current.set(stableKey, Date.now());
 
                 // Update EventLog detections
                 setDetections(prev => {
-                  const existingIndex = prev.findIndex(p => p.class === classKey);
+                  const existingIndex = prev.findIndex(p => p.id === stableKey);
                   if (existingIndex >= 0) {
                     const updated = [...prev];
-                    updated[existingIndex] = { ...det, id: prev[existingIndex].id };
+                    updated[existingIndex] = det;
                     return updated;
                   }
                   return [det, ...prev].slice(0, 200);
                 });
 
-                // DB save with deduplication
-                const lastSaved = trackSavedRef.current.get(classKey) || 0;
+                // DB save — dedup by track_id (10s client-side throttle, Rust deduplicates server-side too)
+                const lastSaved = trackSavedRef.current.get(stableKey) || 0;
                 const now = Date.now();
                 if (now - lastSaved > 10000) {
-                  trackSavedRef.current.set(classKey, now);
+                  trackSavedRef.current.set(stableKey, now);
                   const payload = {
                     ts: det.ts,
                     object_class: det.class,
@@ -351,7 +352,12 @@ export function RealtimeMonitoring({
                     source: 'monitoring',
                     source_ref: roomId || 'live_feed',
                     bbox: d.bbox_xywh,
-                    meta: { img_w: iw, img_h: ih, frame_id: msg.frame_id }
+                    meta: {
+                      img_w: iw,
+                      img_h: ih,
+                      frame_id: msg.frame_id,
+                      track_id: d.track_id ?? null,  // ByteTracker ID for server-side dedup
+                    }
                   };
                   fetch('/api/events/ingest', {
                     method: 'POST',
@@ -360,6 +366,7 @@ export function RealtimeMonitoring({
                   }).catch(() => { });
                 }
               });
+
             }
           } catch (e) {
             console.warn('[aiortc] DataChannel parse error:', e);

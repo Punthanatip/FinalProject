@@ -211,6 +211,15 @@ async fn ingest_event(
     State(state): State<AppState>,
     Json(payload): Json<IngestEventRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Dedup by track_id: skip if same track seen in this source_ref within 10s
+    if let Some(meta) = &payload.meta {
+        if let Some(track_id) = meta.get("track_id").and_then(|v| v.as_str()) {
+            if db::check_duplicate_track(&state.db, &payload.source_ref, track_id).await?.is_some() {
+                return Ok(Json(json!({"status": "skipped", "reason": "duplicate track_id"})));
+            }
+        }
+    }
+
     let class_id = db::get_or_create_class(&state.db, &payload.object_class).await?;
     let ts = time::OffsetDateTime::parse(&payload.ts, &time::format_description::well_known::Rfc3339)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid timestamp".to_string()))?;
