@@ -1,6 +1,7 @@
 //! FOD Detection Backend - REST API Server
 //! Handles requests from frontend and proxies to AI service
 
+mod auth;
 mod db;
 
 use axum::{
@@ -78,15 +79,28 @@ async fn main() {
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:3000".parse::<HeaderValue>().unwrap())
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers(tower_http::cors::Any);
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+        ])
+        .allow_credentials(true);
 
     let app = Router::new()
+        // Health
         .route("/health", get(health))
         .route("/health/ai", get(ai_health))
         .route("/health/ai-ready", get(ai_ready))
         .route("/health/db", get(db_health))
+        // Auth
+        .route("/auth/login", post(auth::login_handler))
+        .route("/auth/register", post(auth::register_handler))
+        .route("/auth/me", get(auth::me_handler))
+        .route("/auth/logout", post(auth::logout_handler))
+        // Detection
         .route("/infer", post(infer))
         .route("/proxy/detect", post(proxy_detect))
+        // Dashboard & Events
         .route("/dashboard/summary", get(dashboard_summary))
         .route("/events/recent", get(recent_events))
         .route("/events/query", get(query_events))
