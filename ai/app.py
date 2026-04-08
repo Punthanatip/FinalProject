@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from ultralytics import YOLO
 
 # aiortc imports for WebRTC
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCRtpSender
 from aiortc.contrib.media import MediaRelay
 from av import VideoFrame
 
@@ -217,7 +217,7 @@ class AnnotatedVideoTrack(VideoStreamTrack):
             scale = MIN_HEIGHT / h
             new_w = int(w * scale)
             new_h = MIN_HEIGHT
-            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
             if self._frame_count <= 1:
                 logger.info(f"Upscaled frame from {w}x{h} to {new_w}x{new_h}")
         
@@ -406,7 +406,18 @@ async def webrtc_offer(request: Request):
                 config_holder=config_holder  # Pass config holder for real-time threshold updates
             )
             sender = pc.addTrack(annotated_track)
-            # Using default VP8 codec (faster software encoding than H.264)
+            # Force H.264 codec on ALL video transceivers
+            try:
+                capabilities = RTCRtpSender.getCapabilities("video")
+                if capabilities and capabilities.codecs:
+                    h264_codecs = [c for c in capabilities.codecs if "h264" in c.mimeType.lower()]
+                    if h264_codecs:
+                        for transceiver in pc.getTransceivers():
+                            if transceiver.kind == "video":
+                                transceiver.setCodecPreferences(h264_codecs)
+                                logger.info("🚀 Forced H.264 as ONLY codec for video transceiver")
+            except Exception as e:
+                logger.warning(f"Could not set H.264 preference: {e}")
             
             @track.on("ended")
             async def on_ended():
@@ -415,18 +426,7 @@ async def webrtc_offer(request: Request):
     await pc.setRemoteDescription(offer_desc)
     answer = await pc.createAnswer()
     
-    # Patch SDP to increase outbound video bitrate (aiortc default is too low ~1-2 Mbps)
-    # b=AS sets bandwidth in kbps — 12000 = 12 Mbps for clear 720p video
-    patched_sdp = answer.sdp
-    patched_lines = []
-    for line in patched_sdp.splitlines():
-        patched_lines.append(line)
-        # Inject bitrate after the VP8 codec line (m=video section)
-        if line.startswith("m=video"):
-            patched_lines.append("b=AS:12000")
-    patched_sdp = "\r\n".join(patched_lines)
-    
-    await pc.setLocalDescription(RTCSessionDescription(sdp=patched_sdp, type=answer.type))
+    await pc.setLocalDescription(answer)
     
     # Wait for ICE gathering to complete
     while pc.iceGatheringState != "complete":
