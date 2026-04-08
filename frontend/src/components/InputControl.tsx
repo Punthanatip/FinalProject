@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Upload, Video, Radio as RadioIcon, PlayCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { useInputConfig } from '../app/input-config-context';
 
 interface InputControlProps {
   onStartDetection: (config: any) => void;
@@ -9,13 +10,24 @@ interface InputControlProps {
 type SourceType = 'image' | 'video' | 'live';
 
 export function InputControl({ onStartDetection }: InputControlProps) {
-  const [sourceType, setSourceType] = useState<SourceType>('image');
-  const [file, setFile] = useState<File | null>(null);
-  const [roomId, setRoomId] = useState('');
-  const [latitude, setLatitude] = useState('13.6900');
-  const [longitude, setLongitude] = useState('100.7500');
-  const [yaw, setYaw] = useState('92.3');
-  const [threshold, setThreshold] = useState(0.70);
+  // Persistent config from global context (survives navigation)
+  const { config, setConfig } = useInputConfig();
+  const sourceType = config.sourceType;
+  const latitude   = config.latitude;
+  const longitude  = config.longitude;
+  const yaw        = config.yaw;
+  const threshold  = config.threshold;
+  const roomId     = config.roomId;
+
+  const setSourceType = (v: SourceType)  => setConfig({ sourceType: v });
+  const setLatitude   = (v: string)      => setConfig({ latitude: v });
+  const setLongitude  = (v: string)      => setConfig({ longitude: v });
+  const setYaw        = (v: string)      => setConfig({ yaw: v });
+  const setThreshold  = (v: number)      => setConfig({ threshold: v });
+  const setRoomId     = (v: string)      => setConfig({ roomId: v });
+
+  // Non-persistent local state
+  const [file, setFile]           = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingTime, setLoadingTime] = useState(0);
   const [hasCamera, setHasCamera] = useState(false);
@@ -23,15 +35,15 @@ export function InputControl({ onStartDetection }: InputControlProps) {
   const liveVideoRef = useRef<HTMLVideoElement>(null);
   const [gpsStatus, setGpsStatus] = useState<'loading' | 'success' | 'denied' | 'unavailable'>('loading');
 
-  // Auto-fill GPS coordinates on mount
+  // Auto-fill GPS on mount (only if still at default coordinates)
   useEffect(() => {
-    if (!("geolocation" in navigator)) {
+    if (!('geolocation' in navigator)) {
       setGpsStatus('unavailable');
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        // Always update to current device GPS — never use stale saved values
         setLatitude(pos.coords.latitude.toFixed(6));
         setLongitude(pos.coords.longitude.toFixed(6));
         setGpsStatus('success');
@@ -39,21 +51,40 @@ export function InputControl({ onStartDetection }: InputControlProps) {
       (err) => {
         console.warn('GPS error:', err.message);
         setGpsStatus(err.code === 1 ? 'denied' : 'unavailable');
-        // Keep default Suvarnabhumi coordinates as fallback
+        // Keep whatever value is in context as fallback
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Try to resume existing camera stream on mount
   useEffect(() => {
     if (sourceType !== 'live') return;
     const existing = (typeof window !== 'undefined') ? (window as any).__liveStream as MediaStream | undefined : undefined;
-    if (existing && liveVideoRef.current) {
-      try { liveVideoRef.current.srcObject = existing; } catch { }
+    if (existing && existing.active) {
+      if (liveVideoRef.current) {
+        try { liveVideoRef.current.srcObject = existing; } catch { }
+      }
       setLiveStream(existing);
       setHasCamera(true);
     }
   }, [sourceType]);
+
+  // Auto-connect camera when sourceType switches to live
+  useEffect(() => {
+    if (sourceType !== 'live' || hasCamera) return;
+    const existing = (typeof window !== 'undefined') ? (window as any).__liveStream as MediaStream | undefined : undefined;
+    if (existing && existing.active) return; // already handled above
+    navigator.mediaDevices?.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } })
+      .then(ms => {
+        setLiveStream(ms);
+        setHasCamera(true);
+        try { (window as any).__liveStream = ms; } catch { }
+      })
+      .catch(() => { /* user clicks connect manually */ });
+  }, [sourceType, hasCamera]);
+
 
   const connectLiveCamera = async () => {
     try {
@@ -113,8 +144,20 @@ export function InputControl({ onStartDetection }: InputControlProps) {
     return file && latitude && longitude && yaw;
   };
 
+  const saveConfig = () => { /* no-op: context handles persistence */ };
+
   const handleStartDetection = async () => {
-    if (!isValid()) return;
+    // Show helpful toast if validation fails instead of silently doing nothing
+    if (!isValid()) {
+      if (sourceType === 'live' && !hasCamera) {
+        toast.error('กรุณาเชื่อมต่อกล้องก่อน', { description: 'กดปุ่ม Connect Camera แล้วลองใหม่' });
+      } else if (sourceType !== 'live' && !file) {
+        toast.error('กรุณาเลือกไฟล์ก่อน', { description: `อัพโหลด${sourceType === 'image' ? 'รูปภาพ' : 'วิดีโอ'}แล้วลองใหม่` });
+      } else {
+        toast.error('กรอกข้อมูลให้ครบ', { description: 'ตรวจสอบ Latitude, Longitude และ Yaw' });
+      }
+      return;
+    }
     // Image: upload once to backend for detection preview; Video/Live: skip upload, process client-side
     if (sourceType === 'image') {
       setIsLoading(true);
@@ -145,13 +188,12 @@ export function InputControl({ onStartDetection }: InputControlProps) {
           yaw: parseFloat(yaw),
           threshold
         };
-        try {
-          const json = await res.json();
-          sessionStorage.setItem(`det:${cfgRoomId}`, JSON.stringify(json));
-        } catch { }
+        const json = await res.json();
+        void json; // result unused - monitoring page handles display via onStartDetection config
         toast.success('Detection started', {
           description: `Processing ${file?.name} with threshold ${threshold.toFixed(2)}`
         });
+        saveConfig();
         onStartDetection(config);
       } catch (error) {
         clearInterval(timer);
@@ -176,6 +218,7 @@ export function InputControl({ onStartDetection }: InputControlProps) {
       toast.success('Starting real-time detection', {
         description: sourceType === 'live' ? 'Live camera' : (file ? `Video: ${file.name}` : 'Video')
       });
+      saveConfig();
       onStartDetection(config);
     }
   };

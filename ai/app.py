@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from ultralytics import YOLO
 
 # aiortc imports for WebRTC
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCRtpSender
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaRelay
 from av import VideoFrame
 
@@ -119,13 +119,16 @@ class AnnotatedVideoTrack(VideoStreamTrack):
         
         if model is not None and READY:
             try:
-                results = model.predict(
-                    img, 
-                    conf=conf_threshold, 
+                # ByteTracker: persist=True maintains track IDs across frames
+                results = model.track(
+                    img,
+                    conf=conf_threshold,
                     imgsz=640,
-                    verbose=False, 
+                    verbose=False,
                     device=DEVICE,
-                    half=True  # FP16 inference - ~30% faster on GPU
+                    half=True,         # FP16 inference - ~30% faster on GPU
+                    persist=True,      # Keep track IDs across frames (ByteTracker)
+                    tracker="bytetrack.yaml"  # Use ByteTracker (bundled in ultralytics)
                 )
                 
                 for box in results[0].boxes:
@@ -133,18 +136,20 @@ class AnnotatedVideoTrack(VideoStreamTrack):
                     cls_id = int(box.cls.item())
                     cls_name = results[0].names.get(cls_id, str(cls_id))
                     conf = float(box.conf.item())
+                    # ByteTracker assigns persistent track_id per object across frames
+                    track_id = int(box.id.item()) if box.id is not None else None
                     
                     color = self.get_severity_color(conf)
                     cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
                     
-                    label = f"{cls_name} {conf:.0%}"
+                    label = f"#{track_id} {cls_name} {conf:.0%}" if track_id is not None else f"{cls_name} {conf:.0%}"
                     (label_w, label_h), baseline = cv2.getTextSize(
                         label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
                     )
                     cv2.rectangle(
-                        img, 
-                        (x1, y1 - label_h - baseline - 5), 
-                        (x1 + label_w + 5, y1), 
+                        img,
+                        (x1, y1 - label_h - baseline - 5),
+                        (x1 + label_w + 5, y1),
                         color, -1
                     )
                     cv2.putText(
@@ -155,6 +160,7 @@ class AnnotatedVideoTrack(VideoStreamTrack):
                     detections_list.append({
                         "cls": cls_name,
                         "conf": conf,
+                        "track_id": str(track_id) if track_id is not None else None,
                         "bbox_xywh": [x1, y1, x2 - x1, y2 - y1],
                         "bbox_xywh_norm": [x1/w, y1/h, (x2-x1)/w, (y2-y1)/h],
                     })
@@ -187,12 +193,6 @@ class AnnotatedVideoTrack(VideoStreamTrack):
         elapsed = perf_counter() - self._start_time
         fps = self._frame_count / elapsed if elapsed > 0 else 0
         
-        # Draw FPS on frame
-        cv2.putText(
-            img, f"FPS: {fps:.1f}", (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2
-        )
-        
         # Send detection metadata via DataChannel
         # data_channel is a holder dict {"channel": RTCDataChannel or None}
         if self.data_channel and detections_list:
@@ -217,7 +217,7 @@ class AnnotatedVideoTrack(VideoStreamTrack):
             scale = MIN_HEIGHT / h
             new_w = int(w * scale)
             new_h = MIN_HEIGHT
-            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
             if self._frame_count <= 1:
                 logger.info(f"Upscaled frame from {w}x{h} to {new_w}x{new_h}")
         
@@ -406,20 +406,7 @@ async def webrtc_offer(request: Request):
                 config_holder=config_holder  # Pass config holder for real-time threshold updates
             )
             sender = pc.addTrack(annotated_track)
-            
-            # Force H.264 codec on ALL video transceivers (more aggressive)
-            try:
-                capabilities = RTCRtpSender.getCapabilities("video")
-                if capabilities and capabilities.codecs:
-                    # Filter to keep ONLY H.264 codecs (exclude VP8/VP9)
-                    h264_codecs = [c for c in capabilities.codecs if "h264" in c.mimeType.lower()]
-                    if h264_codecs:
-                        for transceiver in pc.getTransceivers():
-                            if transceiver.kind == "video":
-                                transceiver.setCodecPreferences(h264_codecs)
-                                logger.info("🚀 Forced H.264 as ONLY codec for video transceiver")
-            except Exception as e:
-                logger.warning(f"Could not set H.264 preference: {e}")
+            # Using default VP8 codec (faster software encoding than H.264)
             
             @track.on("ended")
             async def on_ended():
@@ -428,8 +415,18 @@ async def webrtc_offer(request: Request):
     await pc.setRemoteDescription(offer_desc)
     answer = await pc.createAnswer()
     
-    # setCodecPreferences already configured H.264 - just use the answer directly
-    await pc.setLocalDescription(answer)
+    # Patch SDP to increase outbound video bitrate (aiortc default is too low ~1-2 Mbps)
+    # b=AS sets bandwidth in kbps — 12000 = 12 Mbps for clear 720p video
+    patched_sdp = answer.sdp
+    patched_lines = []
+    for line in patched_sdp.splitlines():
+        patched_lines.append(line)
+        # Inject bitrate after the VP8 codec line (m=video section)
+        if line.startswith("m=video"):
+            patched_lines.append("b=AS:12000")
+    patched_sdp = "\r\n".join(patched_lines)
+    
+    await pc.setLocalDescription(RTCSessionDescription(sdp=patched_sdp, type=answer.type))
     
     # Wait for ICE gathering to complete
     while pc.iceGatheringState != "complete":

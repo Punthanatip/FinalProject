@@ -97,8 +97,6 @@ async fn main() {
         .route("/auth/register", post(auth::register_handler))
         .route("/auth/me", get(auth::me_handler))
         .route("/auth/logout", post(auth::logout_handler))
-        // Detection
-        .route("/infer", post(infer))
         .route("/proxy/detect", post(proxy_detect))
         // Dashboard & Events
         .route("/dashboard/summary", get(dashboard_summary))
@@ -175,18 +173,6 @@ async fn send_to_ai(client: &Client, url: &str, bytes: bytes::Bytes, filename: S
 
 // ==================== AI Inference Endpoints ====================
 
-async fn infer(
-    State(state): State<AppState>,
-    Query(params): Query<SaveParams>,
-    mut mp: Multipart,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let (bytes, filename) = extract_file(&mut mp, "upload.jpg").await?;
-    let url = build_ai_url(&state.ai_base, "v1/detect", params.conf, params.imgsz);
-    let result = send_to_ai(&state.http, &url, bytes, filename).await?;
-    maybe_save(&state, &result, &params).await?;
-    Ok(Json(result))
-}
-
 async fn proxy_detect(
     State(state): State<AppState>,
     Query(params): Query<SaveParams>,
@@ -238,6 +224,15 @@ async fn ingest_event(
     State(state): State<AppState>,
     Json(payload): Json<IngestEventRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Dedup by track_id: skip if same track seen in this source_ref within 10s
+    if let Some(meta) = &payload.meta {
+        if let Some(track_id) = meta.get("track_id").and_then(|v| v.as_str()) {
+            if db::check_duplicate_track(&state.db, &payload.source_ref, track_id).await?.is_some() {
+                return Ok(Json(json!({"status": "skipped", "reason": "duplicate track_id"})));
+            }
+        }
+    }
+
     let class_id = db::get_or_create_class(&state.db, &payload.object_class).await?;
     let ts = time::OffsetDateTime::parse(&payload.ts, &time::format_description::well_known::Rfc3339)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid timestamp".to_string()))?;

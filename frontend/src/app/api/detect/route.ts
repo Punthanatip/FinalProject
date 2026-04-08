@@ -37,8 +37,7 @@ export async function POST(request: Request) {
 
   const headers: Record<string, string> = {};
   if (process.env.BACKEND_API_KEY) headers["Authorization"] = `Bearer ${process.env.BACKEND_API_KEY}`;
-  const isStream = source === 'video' || source === 'live';
-  const backendUrl = `${base.replace(/\/$/, '')}/${isStream ? 'proxy/track' : 'proxy/detect'}?${params.toString()}`;
+  const backendUrl = `${base.replace(/\/$/, '')}/proxy/detect?${params.toString()}`;
   const res = await fetch(backendUrl, { method: "POST", body: outForm, headers });
   const contentType = res.headers.get("content-type") || "application/json";
   const body = await res.text();
